@@ -61,7 +61,7 @@ const submit = async () => {
                             <v-text-field density="compact" v-model="user.identifier" :rules="[rules.usernamerequired]" variant="outlined"
                                 class="mb-6"></v-text-field>
                             <label class="v-label pb-2">Password</label>
-                            <v-text-field density="compact" type="password" v-model="user.password" :rules="[rules.passwordrequired]"
+                            <v-text-field density="compact" type="password" @keydown.enter="submit" v-model="user.password" :rules="[rules.passwordrequired]"
                                 variant="outlined"></v-text-field>
                             <div class="flex flex-wrap items-center my-3 -ml-2">
                                 <v-checkbox color="info" hide-details label="Remeber this Devide"></v-checkbox>
