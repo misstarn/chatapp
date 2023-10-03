@@ -18,10 +18,12 @@
     "nuxt": "^3.7.3"
   },
   "dependencies": {
+    "@fancyapps/ui": "^5.0.22",
     "@mdi/js": "^7.2.96",
     "@pinia/nuxt": "^0.4.11",
     "date-fns": "^2.30.0",
     "pinia": "^2.1.6",
+    "qs": "^6.11.2",
     "socket.io-client": "^4.7.2",
     "vuetify": "^3.3.16"
   }

@@ -1,6 +1,11 @@
 <script setup>
 import { differenceInYears, format, getDate, getMonth, intlFormatDistance } from 'date-fns'
+import { Fancybox } from "@fancyapps/ui";
+import "@fancyapps/ui/dist/fancybox/fancybox.css";
 
+Fancybox.bind("[data-fancybox]", {
+    // Your custom options
+});
 
 const SERVER_URL = 'http://localhost:1338'
 const baseUrl = useRuntimeConfig().public.baseUrl
@@ -8,9 +13,11 @@ const baseUrl = useRuntimeConfig().public.baseUrl
 // 在store读取token和user
 const authStore = useStore().useAuthStore()
 const msgStore = useStore().useMsgStore()
+const keysStore = useStore().useKeysStore()
 
 const { token, user, logout: logoutUser } = authStore
-const { friends: fri } = msgStore
+const { friends: fri, clearMessage } = msgStore
+const { keyList, privateKey, publicKey, clearKey } = keysStore
 
 import { io } from 'socket.io-client'
 
@@ -23,11 +30,6 @@ definePageMeta({
     ],
 });
 
-
-
-onMounted(() => {
-
-})
 
 const applyForm = ref({
     message: '请求添加好友',
@@ -86,9 +88,8 @@ const friends = ref(fri)
 
 const groups = ref([])
 
-// 获取群组
+// 获取群聊列表
 socket.on('groups', (data) => {
-    console.log(data)
     const gs = data.map((g) => {
         return {
             ...g.group,
@@ -96,10 +97,43 @@ socket.on('groups', (data) => {
         }
     })
     groups.value = gs
-
-    console.log(groups.value)
+    // console.log(groups.value)
 })
 
+// 好友组列表和好友
+const userGroupMembers = ref([])
+
+const friends11 = ref([])
+// 获取好友分组列表，好友列表
+socket.on('userGroup', (data) => {
+    friends11.value = []
+    const da = data.map(d => {
+        const ugm = d.user_group_members.filter(item => item.user.online == true)
+        return {
+            ...d,
+            onlineCount: ugm.length
+        }
+    })
+    userGroupMembers.value = da
+
+    // 好友组列表初始化
+    selectgroups.value = da.map(ugm => {
+        friends11.value = [...friends11.value, ...ugm.user_group_members]
+        const group = {
+            name: ugm.name,
+            id: ugm.id
+        }
+        return group
+    })
+
+    // console.log(da, friends11.value)
+    // 默认值初始化
+    // 申请好友选择好友组
+    applyForm.value.userGroup = selectgroups.value[0]
+    // 操作申请消息选择好友组
+    applyReceiveUserGroup.value = selectgroups.value[0]
+
+})
 
 // 遇见错误
 socket.on('connect_error', () => {
@@ -116,50 +150,407 @@ socket.on('disconnect', (reason) => {
     console.log(socket.id)
 })
 
-// 更新消息列表
-const updateMsg = (message) => {
+
+
+// 更新消息列表, 历史记录消息
+const updateMsg = async (message) => {
+
+    // console.log(message)
+    // 解密消息
+    message.msg.content = await decryptMessage(message.msg)
+
+    // console.log(message)
+    messages.value.unshift(message)
+    nextTick(() => {
+        // 发信息才下拉到底部
+        // if (message.me || (scrollContainer.value.scrollTop + 845) >= scrollContainer.value.scrollHeight) {
+        //     scrollToBottom()
+        // }
+        ScrollToPre()
+    })
+
+    // console.log(messages)
+}
+const updateMsg2 = async (message) => {
+
+    // console.log(message)
+    // 解密消息
+    message.msg.content = await decryptMessage(message.msg)
+
+    // console.log(message)
     messages.value.push(message)
     nextTick(() => {
         // 发信息才下拉到底部
-        if (message.me) {
-            scrollToBottom()
-        }
+        // if (message.me || (scrollContainer.value.scrollTop + 845) >= scrollContainer.value.scrollHeight) {
+        //     scrollToBottom()
+        // }
+        ScrollToPre()
     })
 
-    console.log(messages)
+    // console.log(messages)
+}
+
+let crypto = ref(null)
+const userFilter = ['username', 'online', 'name', 'email', 'uid', 'birthday', 'gender', 'region', 'description']
+
+
+onMounted(() => {
+    if (process.client) {
+        crypto.value = window.crypto
+    }
+})
+
+
+
+
+// 获取历史消息
+const getHistory = async (start) => {
+
+    console.log(start, targetUser.value, '000000000')
+
+    let filters = {}
+    if (targetUser.value.tab == 'friends') {
+        filters = {
+            friendship: {
+                id: targetUser.value.friendship.id
+            }
+        }
+    } else {
+        filters = {
+            group: {
+                id: targetUser.value.id
+            },
+            isGroupMessage: true
+        }
+    }
+    const params = {
+        filters: filters,
+        sort: {
+            createdAt: 'desc'
+        },
+        pagination: {
+            start: start,
+            limit: 15
+        },
+        populate: {
+            sender: {
+                // 显示过滤
+                fields: userFilter,
+                populate: {
+                    avatar: {
+                        fields: ['url']
+                    }
+                }
+            },
+            receiver: {
+                fields: userFilter,
+                populate: {
+                    avatar: {
+                        fields: ['url']
+                    }
+                }
+            }
+        }
+
+    }
+
+    await history11(params).then(res => {
+        console.log(res.value.data, '1123')
+
+        if (res) {
+            res.value.data.forEach(message => {
+                const d = {
+                    msg: message.attributes,
+                    user: message.attributes.sender.data.attributes,
+                    me: currentUser.value.id === message.attributes.sender.data.id ? true : false,
+                }
+                updateMsg(d)
+            });
+        }
+    })
+}
+
+
+// 生成随机的 IV（初始化向量）
+async function generateRandomIV() {
+    return await crypto.value.getRandomValues(new Uint8Array(12)); // 12字节的 IV（96位）
+}
+
+// 生成对称密钥
+async function generateSymmetricKey() {
+    // 生成对称密钥
+    return await crypto.value.subtle.generateKey(
+        {
+            name: 'AES-GCM', // 对称加密算法（可以根据需求选择其他算法）
+            length: 256, // 密钥长度（可以根据需求选择不同的长度）
+        },
+        true, // 是否可导出密钥
+        ['encrypt', 'decrypt'] // 使用密钥的操作
+    );
+
+    // console.log('生成的对称密钥:', key);
+
+    // crypto.value.subtle.exportKey('jwk', key).then(jwk => {
+    //     console.log(jwk)
+    //     msgStore.$patch({
+    //         symmetricKey: jwk
+    //     })
+    // })
+
+    // 可以将密钥存储在 Vuex 等状态管理中，以供后续使用
+}
+
+// 加密消息
+async function encryptMessage(message, symmetricKey) {
+    try {
+        // 生成随机IV
+        const iv = await generateRandomIV()
+
+        // 将消息转换为ArrayBuffer
+        const encoder = new TextEncoder()
+        const data = encoder.encode(message)
+
+        // 使用对称密钥和IV加密消息
+        const encryptedData = await crypto.value.subtle.encrypt(
+            {
+                name: 'AES-GCM', //加密算法
+                iv, //初始化向量
+            },
+            symmetricKey, //对称密钥
+            data //要加密的数据
+        )
+
+        // 返回加密后的数据和IV
+        return { encryptedData, iv }
+
+    } catch (error) {
+        console.error('加密消息时出错：', error)
+        throw error
+    }
+}
+
+
+// 解密消息
+async function decryptMessage(message) {
+
+    // console.log(message)
+
+    const messageData = base64ToArrayBuffer(message.content)
+
+    const symmKey = await jwkToCryptoKey(JSON.parse(message.jwk_key))
+
+    const iv = hexToUint8Array(message.iv)
+
+    // 解密
+    try {
+        // 使用对称密钥和IV解密消息
+        const decryptedData = await crypto.value.subtle.decrypt(
+            {
+                name: 'AES-GCM', // 加密算法
+                iv: iv, //初始化向量
+            },
+            symmKey, //对称密钥
+            messageData //加密后的数据
+        )
+        // 将解密后的数据转换为字符串
+        const decoder = new TextDecoder();
+        const decryptedMessage = decoder.decode(decryptedData)
+
+        // 返回解密后的消息
+        // console.log(decryptedMessage)
+
+        return decryptedMessage
+
+    } catch (error) {
+        console.error('解密消息时出错：', error)
+        throw error
+    }
 }
 
 // 发送信息
 const message = ref('')
 
-// 发送私人消息
-const send = () => {
-    console.log(message.value, targetUser)
+// 发送私聊消息
+const send = async () => {
+    console.log(message.value, targetUser.value)
+
+    // 查找对方的密钥
+    let jwk = {}
+    jwk = keyList.find((key) => key.name == targetUser.value.uid)
+
+    // 
+    console.log(jwk)
+
+    let symmetricKey1 = null
+    let publicKey1 = null
+
+    if (jwk && jwk.keys.symmetricKey) {
+        // 如果已存在，就是交换了密钥的
+        // jwk转换出对称密钥 
+        symmetricKey1 = await jwkToCryptoKey(jwk.keys.symmetricKey)
+    } else {
+        // 不存在- 生成对称密钥
+        await generateSymmetricKey().then(async symmetricKey => {
+            console.log(symmetricKey, publicKey1)
+            symmetricKey1 = symmetricKey
+            // 将对称密钥提取jwk，保存到密钥队中
+            crypto.value.subtle.exportKey('jwk', symmetricKey).then(async jwk1 => {
+                jwk = {
+                    keys: {
+                        symmetricKey: jwk1
+                    }
+                }
+                console.log(jwk1)
+                keyList.push({
+                    name: targetUser.value.uid,
+                    keys: {
+                        symmetricKey: jwk1,
+                        publicKey: {}
+                    }
+                })
+                keysStore.$patch({
+                    keyList: keyList
+                })
+            })
+        })
+    }
+
+    console.log(symmetricKey1, jwk)   
+
+    // 加密消息 使用对称密钥
+    const { encryptedData, iv } = await encryptMessage(message.value, symmetricKey1);
+
+    // 将加密消息转换为字符串
+    const dataString = arrayBufferToBase64(encryptedData)
+    // 将iv转换为字符串
+    const ivString = unit8ArrayToHex(iv)
+
+    console.log(encryptedData, iv, dataString, ivString)
+    console.log(base64ToArrayBuffer(dataString), hexToUint8Array(ivString))
+
     if (message.value) {
         socket.emit('privateMessage', {
             targetUser: targetUser.value,
-            message: message.value
+            message: dataString,
+            type: 'message',
+            fileName: '',
+            iv: ivString,
+            key: JSON.stringify(jwk.keys.symmetricKey),
+            fileId: 0
         })
     }
     message.value = ''
+
+    // 发送文件
+    if (files.value) {
+        for (let i = 0; i < files.value.length; i++) {
+            // 单独发送
+            const message = {
+                me: true,
+                user: targetUser.value,
+                msg: {
+                    createdAt: new Date(),
+                    type: 'image',
+                    fileName: files.value[i].name,
+                    content: images.value[i],
+                    status: 'pending',
+                },
+                name: files.value[i].name
+            }
+            messages.value.push(message)
+            console.log(messages.value.length)
+
+            // 上传文件
+            await upload(files.value[i]).then(async res => {
+                console.log(res)
+                // 加密消息
+                const { encryptedData: encryptedData11, iv: iv11 } = await encryptMessage(res.value[0].url, symmetricKey1);
+                // 将加密消息转换为字符串
+                const dataString22 = arrayBufferToBase64(encryptedData11)
+                // 将iv转换为字符串
+                const ivString22 = unit8ArrayToHex(iv11)
+
+                // 发送消息
+                socket.emit('privateMessage', {
+                    targetUser: targetUser.value,
+                    message: dataString22,
+                    type: 'image',
+                    iv: ivString22,
+                    key: JSON.stringify(jwk.keys.symmetricKey),
+                    fileName: res.value[0].name,
+                    fileId: res.value[0].id
+                })
+                if (res.value) {
+                    messages.value.forEach(msg => {
+                        if (msg.name == files.value[i].name && res.value[0].name == files.value[i].name) {
+                            console.log(msg)
+                            msg.msg.content = res.value[0].url
+                            msg.msg.status = 'accepted'
+                        }
+                        scrollToBottom()
+                        console.log(res.value, msg)
+                    })
+
+                }
+            })
+
+        }
+
+        // 清空文件
+        files.value = []
+        images.value = []
+        sendImage.value = false
+
+    }
 }
 
 // 登出
 const logout = () => {
-    socket.disconnect()
+
+    logoutUser()
 
     localStorage.removeItem('auth')
-    localStorage.removeItem('msg')
-
-    // logoutUser()
+    localStorage.removeItem('message')
+    localStorage.removeItem('keys')
 
     navigateTo('/login')
+
+    socket.disconnect()
 }
 
 // 监听返回私人消息
-socket.on('receivePrivateMessage', (message) => {
+socket.on('receivePrivateMessage', async (message) => {
     // 展示私人消息
-    console.log(message, friends.value)
+    console.log(message.msg, message.user)
+
+    const msg = message.msg
+
+    // 将加密消息字符串转换为arryBuffer加密消息
+
+    // 将加密消息使用对称密钥解密
+    let jwk = null
+
+
+    let symmetricKey = null
+
+    // 是否是群消息，群消息就没有jwk,私聊才需要去找
+    if (message.msg.isGroupMessage) {
+        // 是群消息
+    } else {
+        // 不是群消息
+        jwk = keyList.find((key) => key.name == message.user.uid)
+
+        console.log(jwk)
+
+        msg.jwk_key = JSON.stringify(jwk.keys.symmetricKey)
+    }
+
+    // 将消息解密出来放入最后一条记录
+    const lastM = await decryptMessage(message.msg)
+
+    console.log(lastM)
+
+    console.log(message)
 
     // 接收方,查找消息发送方,更新最后消息
     let friend = getFriend(message.user)
@@ -167,7 +558,10 @@ socket.on('receivePrivateMessage', (message) => {
     console.log(friend)
     if (friend) {
         friend.lastMsg = {
-            content: message.msg.content,
+            // content: message.msg.content,
+            username: message.user.name,
+            content: lastM,
+            type: message.msg.type,
             createdAt: message.msg.createdAt
         }
     } else {
@@ -175,7 +569,9 @@ socket.on('receivePrivateMessage', (message) => {
         friend = getFriend(targetUser.value)
         if (friend) {
             friend.lastMsg = {
-                content: message.msg.content,
+                // content: message.msg.content,
+                content: lastM,
+                type: message.msg.type,
                 createdAt: message.msg.createdAt
             }
         }
@@ -183,7 +579,7 @@ socket.on('receivePrivateMessage', (message) => {
 
     if (message.me || !message.me && message.user.id == targetUser.value.id) {
         // 更新消息列表查看
-        updateMsg(message)
+        updateMsg2(message)
     } else {
         // 存储未读消息
         storeMessageForLaterUser(message)
@@ -241,23 +637,183 @@ function clearUnreadMessage(user) {
 const messages = ref([])
 
 // 选择好友,点击
-const select = (val) => {
+const select = async (val) => {
     console.log(val.id)
     // 设置发送信息的好友
     targetUser.value = val.id
+    messages.value = []
+    // 获取历史记录
 
     getMsgH(targetUser.value)
 }
 
+// 接收公钥
+socket.on('publicKey', async ({ publicKey2, user }) => {
+    console.log(publicKey2, user)
+
+    // jwkToCryptoKey2(publicKey2).then(key => {
+    //     console.log(key)
+    //     publicKey1 = key
+    // })
+    let publicKey1 = null
+    // 将公钥jwk转为CryptoKey格式密钥
+    jwkToCryptoKey2(publicKey2).then(cryptoKey => {
+        console.log(cryptoKey)
+        publicKey1 = cryptoKey
+    })
+    console.log(publicKey1)
+
+    // 生成对称密钥
+    await generateSymmetricKey().then(async symmetricKey => {
+        console.log(symmetricKey, publicKey1)
+
+        // 将对称密钥提取jwk，保存到密钥队中
+        crypto.value.subtle.exportKey('jwk', symmetricKey).then(async jwk => {
+            console.log(jwk)
+            // 使用对方公钥加密对称密钥
+            const encryptedSymmetricKey = await crypto.value.subtle.encrypt(
+                {
+                    name: "RSA-OAEP",
+                },
+                publicKey1,
+                new TextEncoder().encode(JSON.stringify(jwk))
+            )
+
+            console.log(encryptedSymmetricKey, '122')
+            if (keyList.length > 0) {
+                const list = keyList.find((key) => key.name == user.uid)
+                console.log(list)
+                if (list) {
+                    console.log('已存在')
+                } else {
+                    keyList.push({
+                        name: user.uid,
+                        keys: {
+                            symmetricKey: jwk,
+                            publicKey: publicKey2
+                        }
+                    })
+                    keysStore.$patch({
+                        keyList: keyList
+                    })
+                }
+            } else {
+                keyList.push({
+                    name: user.uid,
+                    keys: {
+                        symmetricKey: jwk,
+                        publicKey: publicKey2
+                    }
+                })
+                keysStore.$patch({
+                    keyList: keyList
+                })
+            }
+
+            // 发送公钥和对称密钥，对称密钥为加密后得密钥
+            socket.emit('publicKeyAndSYmmetricKey', {
+                publicKey2: publicKey,
+                symmetricKey: arrayBufferToBase64(encryptedSymmetricKey),
+                targetUser: user
+            })
+
+        }).catch(err => {
+            console.error(err)
+        })
+    }).catch(error => {
+        console.error(error)
+    })
+
+})
+
+// 接收公钥和对称密钥
+socket.on('publicAndSYmmetricKey', async ({ publicKey2, symmetricKey, user }) => {
+    console.log(publicKey2, symmetricKey, user)
+
+    // 解密 对称密钥
+    const symBuffer = base64ToArrayBuffer(symmetricKey)
+    console.log(symBuffer)
+
+    // 私聊转为 CryptoKey类型
+    let privateKey1 = null
+    await jwkToCryptoKey3(privateKey).then(key => {
+        console.log(key)
+        privateKey1 = key
+    })
+
+    console.log(privateKey1)
+
+    // 使用私钥解密,对称密钥
+    const decryptedSymmetricKey = await crypto.value.subtle.decrypt(
+        {
+            name: "RSA-OAEP"
+        },
+        privateKey1, //私钥
+        symBuffer
+    )
+
+    console.log(decryptedSymmetricKey)
+
+    // 获取对称密钥jwt
+    const dsmk = new TextDecoder().decode(decryptedSymmetricKey)
+    console.log(JSON.parse(dsmk))
+
+    // 将对称密钥存入密钥队
+
+    if (keyList.length > 0) {
+        const list = keyList.find((key) => key.name == user.uid)
+        console.log(list)
+        if (list) {
+            console.log('已存在')
+        } else {
+            keyList.push({
+                name: user.uid,
+                keys: {
+                    symmetricKey: JSON.parse(dsmk),
+                    publicKey: publicKey2
+                }
+            })
+            keysStore.$patch({
+                keyList: keyList
+            })
+        }
+    } else {
+        keyList.push({
+            name: user.uid,
+            keys: {
+                symmetricKey: JSON.parse(dsmk),
+                publicKey: publicKey2
+            }
+        })
+        keysStore.$patch({
+            keyList: keyList
+        })
+    }
+})
+
 // 打开消息框并请求消息
-const getMsgH = (targetUser) => {
+const getMsgH = async (targetUser) => {
     console.log(targetUser, currentUser.value)
 
-    // 打开消息框
-    showMsg.value = true
+    console.log(publicKey)
+    const jwk = keyList.find((keys) => keys.name == targetUser.uid)
+
+    if(jwk && jwk.keys.publicKey) {
+        // 已经有公钥交换了
+    } else {
+        // 发送公钥
+        socket.emit('sendPublicKey', {
+            publicKey2: publicKey,
+            targetUser: targetUser
+        })
+    }
+
 
     // 消息列表清空/以后做历史消息
     messages.value = []
+
+    // 打开消息框
+    showMsg.value = true
 
     clearUnreadMessage(targetUser)
 
@@ -266,10 +822,14 @@ const getMsgH = (targetUser) => {
         socket.emit('joinRoom', targetUser.uid)
     }
 
+    await getHistory(0)
+    scrollToBottom()
+    return
     // 请求消息历史
     socket.emit('history', {
         targetUser: targetUser,
-        currentUser: currentUser.value
+        currentUser: currentUser.value,
+        start: 0
     })
 
 }
@@ -281,7 +841,7 @@ const showDetail = ref(false)
 // 选择好友/群聊,点击查看详情
 const selectDetail = (val) => {
 
-    console.log(val.id, tab.value)
+    // console.log(val.id, tab.value)
 
     // 设置详细信息
     if (tab.value == 'groups') { //群详情
@@ -309,11 +869,11 @@ const selectDetail = (val) => {
     showNoticelist.value = false
     showNoticelistGroup.value = false
 
-    console.log(detail.value)
+    // console.log(detail.value)
 
 }
 
-// 发起聊天
+// 发起聊天，进入消息列表页
 const chat = () => {
     console.log(detail.value)
     const friend = getFriend(detail.value)
@@ -341,7 +901,7 @@ const tabChange = (val) => {
 
 // 获取对应的朋友
 const getFriend = (user) => {
-    console.log(user)
+    // console.log(user)
     if (user.username) {
         return friends.value.find(friend => friend.username === user.username)
     } else {
@@ -351,7 +911,7 @@ const getFriend = (user) => {
 
 // 获取消息记录
 socket.on('historyMsgs', (data) => {
-    console.log(data)
+    // console.log(data)
     if (data) {
         data.forEach(message => {
             const d = {
@@ -362,6 +922,8 @@ socket.on('historyMsgs', (data) => {
             updateMsg(d)
         });
     }
+
+
 })
 
 
@@ -369,7 +931,7 @@ socket.on('historyMsgs', (data) => {
 
 // 登录上线
 socket.on('online', ({ username }) => {
-    console.log(username)
+    // console.log(username)
 
     const friend = getFriend({
         username: username
@@ -395,39 +957,6 @@ socket.on('offline', (username) => {
 })
 
 
-const userGroupMembers = ref([])
-
-// 获取好友分组列表，好友列表
-socket.on('userGroup', (data) => {
-    console.log(data)
-
-    const da = data.map(d => {
-        const ugm = d.user_group_members.filter(item => item.user.online == true)
-        return {
-            ...d,
-            onlineCount: ugm.length
-        }
-    })
-    console.log(da)
-    userGroupMembers.value = da
-
-    // 好友组列表初始化
-    selectgroups.value = da.map(ugm => {
-        const group = {
-            name: ugm.name,
-            id: ugm.id
-        }
-        return group
-    })
-
-    // 默认值初始化
-    // 申请好友选择好友组
-    applyForm.value.userGroup = selectgroups.value[0]
-    // 操作申请消息选择好友组
-    applyReceiveUserGroup.value = selectgroups.value[0]
-
-})
-
 
 
 
@@ -450,9 +979,25 @@ const items = ref([
     },
 ])
 
+const previousScrollPosition = ref(0);
 
-const onScroll = (e) => {
-    // console.log(e)
+const onScroll = async (e) => {
+    console.log(e.target.scrollTop, scrollContainer.value.scrollHeight, scrollContainer.value.scrollTop)
+    // return
+    if (e.target.scrollTop == 0 && messages.value.length > 0) {
+        // 请求消息历史
+        previousScrollPosition.value = scrollContainer.value.scrollHeight - scrollContainer.value.scrollTop
+
+        console.log(messages.value.length, previousScrollPosition.value)
+
+        // socket.emit('history', {
+        //     targetUser: targetUser.value,
+        //     currentUser: currentUser.value,
+        //     start: messages.value.length
+        // })
+        await getHistory(messages.value.length)
+
+    }
 }
 
 const scrollContainer = ref(null);
@@ -463,6 +1008,13 @@ const scrollToBottom = () => {
         scrollContainer.value.scrollTop = scrollContainer.value.scrollHeight;
     }
 };
+
+const ScrollToPre = () => {
+    if (scrollContainer.value) {
+        scrollContainer.value.scrollTop = scrollContainer.value.scrollHeight - previousScrollPosition.value;
+    }
+}
+
 
 
 const media = ref(false)
@@ -560,7 +1112,7 @@ const showNoticelistGroup = ref(false)
 // 点击通知
 const changeApply = (val) => {
 
-    if(val.id == 'friend') {
+    if (val.id == 'friend') {
         // 打开好友通知栏
         showNoticelist.value = true
         showNoticelistGroup.value = false
@@ -572,7 +1124,7 @@ const changeApply = (val) => {
         showNoticelistGroup.value = true
         showNoticelist.value = false
         // 获取群通知
-       
+
         socket.emit('groupNotification')
     }
     showDetail.value = false
@@ -588,7 +1140,7 @@ socket.on('friendnotif', (data) => {
 const gnotes = ref([])
 
 // 接收 群通知
-socket.on('groupnotif', ({data}) => {
+socket.on('groupnotif', ({ data }) => {
     console.log(data)
     gnotes.value = data
 })
@@ -636,7 +1188,7 @@ const sendApplyFriend = () => {
     console.log(sendItem.value, applyForm.value)
 
     socket.emit('applyUser', {
-        data:{
+        data: {
             message: applyForm.value.message,
             userGroup: applyForm.value.userGroup.id
         },
@@ -665,7 +1217,7 @@ const applyGroup = (group) => {
 
     console.log(group)
 
-    group_sendoverlay.value= true
+    group_sendoverlay.value = true
 }
 
 // 加入群聊留言
@@ -729,12 +1281,178 @@ socket.on('applyGroupEdit', (data) => {
     console.log(data)
 })
 
+// 切换聊天和联系人
+const change = (val) => {
+    console.log(val)
+    if (val == 'relation') {
+        msg.value = false
+        // 获取群聊和好友列表
+        socket.emit('getUsers')
+        socket.emit('getGroups')
+    } else {
+        msg.value = true
+    }
+}
+
+const files = ref([])
+
+const images = ref([])
+
+// 获取选择图片的base64位码
+const imageUpdate = async (files) => {
+    console.log(files)
+
+    logImagesData(files).then(res => {
+        images.value = res
+    })
+    console.log(images.value)
+}
+
+// 将图像转为base64操作
+async function logImagesData(fileList) {
+    let fileResults = [];
+    const frPromises = fileList.map(reader);
+
+    try {
+        fileResults = await Promise.all(frPromises);
+    } catch (err) {
+        // In this specific case, Promise.all() might be preferred
+        // over Promise.allSettled(), since it isn't trivial to modify
+        // a FileList to a subset of files of what the user initially
+        // selected. Therefore, let's just stash the entire operation.
+        console.error(err);
+        return;
+    }
+
+    const images = []
+    fileResults.forEach((fr) => {
+        // console.log(fr.result); // Base64 `data:image/...` String result.
+        images.push(fr.result)
+    });
+
+    return images
+}
+
+
+// 将图像转为base64
+const reader = (file) => {
+    if (/\.(jpe?g|png|gif)$/i.test(file.name)) {
+        return new Promise((resolve, reject) => {
+            const fr = new FileReader();
+            fr.onload = () => resolve(fr);
+            fr.onerror = (err) => reject(err);
+            fr.readAsDataURL(file);
+        });
+    } else {
+        Message({
+            text: '请选择图像',
+            timeout: 2000,
+            type: 'warning'
+        })
+
+        files.value = []
+    }
+}
+
+const snackbar = ref(false)
+const snackbarText = ref('')
+const timeout = ref(2000)
+
+// 消息
+const Message = ({ type, text, timeout }) => {
+    snackbar.value = true
+    snackbarText.value = text
+    timeout = timeout
+}
+
+
+// 监听粘贴事件
+const handlePaste = (event) => {
+    // 阻止默认粘贴行为，以便自行处理粘贴的内容
+    //   event.preventDefault();
+
+    // 获取粘贴的数据类型
+    const clipboardData = event.clipboardData;
+    const types = clipboardData.types;
+
+    // 判断是否包含"Files"类型，表示粘贴的是文件
+    if (types.includes('Files')) {
+        let pastedfiles = clipboardData.files;
+        console.log('粘贴的是文件：', pastedfiles[0]);
+
+        const fs = []
+        for (let i = 0; i < pastedfiles.length; i++) {
+            fs.push(pastedfiles[i])
+        }
+
+        console.log(fs)
+
+        // 添加到file列表
+        for (let i = 0; i < fs.length; i++) {
+            files.value.push(fs[i])
+        }
+
+
+
+        logImagesData(fs).then(res => {
+            images.value = [...images.value, ...res]
+        })
+
+        // 处理文件，例如上传或显示文件名
+    } else if (types.includes('text/plain')) {
+        // 粘贴的是文本
+        const pastedText = clipboardData.getData('text/plain');
+        console.log('粘贴的是文本：', pastedText);
+        // message.value = pastedText
+
+        // 处理文本内容
+        // this.$refs.inputElement.value += pastedText;
+    } else {
+        console.log('不支持的粘贴类型');
+    }
+}
+
+
+const sendImage = ref(false)
+
+// 发起群聊
+const overlayGroup = ref(false)
+
+// 创建群聊参数
+const createGroupData = ref({
+    name: '',
+    description: '',
+    friends: []
+})
+
+
+const createGroup = () => {
+    console.log(createGroupData.value)
+
+    // 创建群聊
+    socket.emit('createGroup', createGroupData.value)
+
+    overlayGroup.value = false
+
+}
+
+const selectFriend = ref(false)
+
 
 </script>
 
 
 <template>
     <div class="p-8 max-w-[1200px] mx-auto">
+        <v-snackbar v-model="snackbar" :timeout="timeout">
+            {{ snackbarText }}
+
+            <template v-slot:actions>
+                <v-btn color="blue" variant="text" @click="snackbar = false">
+                    Close
+                </v-btn>
+            </template>
+        </v-snackbar>
         <!-- part 1 -->
         <div class="w-full mb-8 rounded-md">
             <div class="px-8 bg-[#ecf2ff] flex justify-between items-center">
@@ -754,7 +1472,7 @@ socket.on('applyGroupEdit', (data) => {
             <div class="flex overflow-hidden">
                 <!-- 选项  letf-->
                 <v-sheet class="flex-shrink-0">
-                    <!-- 个人头像 -->
+                    <!-- 个人头像，点击打开个人信息 -->
                     <v-list-item>
                         <v-menu :offset="menuoffset" transition="slide-y-transition" v-model="menu"
                             :close-on-content-click="false" location="end">
@@ -792,8 +1510,6 @@ socket.on('applyGroupEdit', (data) => {
                                         </v-list>
                                         <hr>
                                     </div>
-
-
                                     <v-list :lines="false">
                                         <v-list-item class="py-4" v-for="(item, i) in profile" :key="i" :value="item">
                                             <template v-slot:prepend>
@@ -823,12 +1539,12 @@ socket.on('applyGroupEdit', (data) => {
                     <v-list density="compact">
                         <!-- 消息 -->
                         <v-list-item>
-                            <v-btn @click="msg = true" icon="mdi-message-processing-outline"
+                            <v-btn @click="change('chat')" icon="mdi-message-processing-outline"
                                 :variant="msg ? 'tonal' : 'plain'"></v-btn>
                         </v-list-item>
                         <!-- 联系人 -->
                         <v-list-item>
-                            <v-btn @click="msg = false" icon="mdi-account-outline"
+                            <v-btn @click="change('relation')" icon="mdi-account-outline"
                                 :variant="!msg ? 'tonal' : 'plain'"></v-btn>
                         </v-list-item>
                     </v-list>
@@ -843,11 +1559,11 @@ socket.on('applyGroupEdit', (data) => {
                             <!-- 搜索 -->
                             <v-sheet>
                                 <div class="px-6 pt-2">
-                                    <!-- 输入 -->
+                                    <!-- 搜索 -->
                                     <v-text-field :loading="loading" density="compact" variant="outlined" label="搜索"
                                         append-inner-icon="mdi-magnify" single-line hide-details v-model="input"
                                         @click:append-inner="onClick" color="info"></v-text-field>
-                                    <!-- 选项 -->
+                                    <!-- 选项 Recent Chats-->
                                     <v-menu transition="slide-y-transition">
                                         <template v-slot:activator="{ props }">
                                             <v-btn v-bind="props" variant="plian" class="text-none text-subtitle-1 mt-4"
@@ -855,6 +1571,7 @@ socket.on('applyGroupEdit', (data) => {
                                                 Recent Chats
                                             </v-btn>
                                         </template>
+                                        <!-- 选项卡 -->
                                         <v-list>
                                             <v-list-item v-for="(item, i) in items" :key="i" :value="item.title">
                                                 <v-list-item-title>{{ item.title }}</v-list-item-title>
@@ -863,13 +1580,14 @@ socket.on('applyGroupEdit', (data) => {
                                     </v-menu>
                                 </div>
                             </v-sheet>
-                            <!-- 消息列表 -->
-                            <div class="relative overflow-y-auto h-[500px] mt-4" v-scroll.self="onScroll" max-height="500">
+                            <!-- 聊天列表 -->
+                            <div class="relative overflow-y-auto h-[500px] mt-4" max-height="500">
                                 <v-list @click:select="select">
                                     <v-list-item v-for="user in friends" :key="user.usernam" :value="user"
                                         active-class="active" class="px-6 py-4 cursor-pointer">
                                         <!-- 头像 -->
                                         <template v-slot:prepend>
+                                            <!-- 好友 -->
                                             <v-badge v-if="user.tab == 'friends'" dot :color="user.online ? 'success' : ''"
                                                 offset-y="32">
                                                 <v-avatar size="45">
@@ -878,6 +1596,7 @@ socket.on('applyGroupEdit', (data) => {
                                                     <v-icon v-else></v-icon>
                                                 </v-avatar>
                                             </v-badge>
+                                            <!-- 群 -->
                                             <v-avatar v-else size="45">
                                                 <v-img v-if="user.groupAvatar.url" cover alt="Avatar"
                                                     :src="baseUrl + user.groupAvatar.url"></v-img>
@@ -886,15 +1605,28 @@ socket.on('applyGroupEdit', (data) => {
                                         </template>
                                         <div>
                                             <div class="flex items-center">
+                                                <!-- 名字 -->
                                                 <h5 class="text-sm font-semibold" style="font-family: inherit!important">{{
                                                     user.name }}</h5>
+                                                <!-- 相隔时间 -->
                                                 <small v-if="user.lastMsg" class="ml-auto text-xs"
                                                     style="font-family: inherit!important">{{ intlFormatDistance(new
                                                         Date(user.lastMsg.createdAt), new Date()) }}</small>
                                             </div>
                                             <div class="flex items-center mt-1">
-                                                <h6 class="text-xs font-normal" style="font-family: inherit!important"
-                                                    v-if="user.lastMsg">{{ user.lastMsg.content }}</h6>
+                                                <!-- 最新消息 -->
+                                                <template v-if="user.tab == 'friends'">
+                                                    <h6 class="text-xs font-normal" style="font-family: inherit!important"
+                                                        v-if="user.lastMsg">{{ user.lastMsg.type == 'image' ? `[图片]` :
+                                                            user.lastMsg.content }}</h6>
+                                                </template>
+                                                <template v-if="user.tab == 'groups'">
+                                                    <h6 class="text-xs font-normal" style="font-family: inherit!important"
+                                                        v-if="user.lastMsg">{{ user.lastMsg.username }}：{{ user.lastMsg.type
+                                                            == 'image' ? `[图片]` :
+                                                            user.lastMsg.content }}</h6>
+                                                </template>
+                                                <!-- 未读消息数 -->
                                                 <v-badge v-if="user.count > 0" color="info" class="ml-auto"
                                                     :content="user.count" inline></v-badge>
                                             </div>
@@ -967,7 +1699,7 @@ socket.on('applyGroupEdit', (data) => {
                             </div>
                             <hr>
                             <!-- 右侧消息记录 -->
-                            <div class="h-[530px] overflow-y-auto relative" ref="scrollContainer" v-scroll.self="onScroll"
+                            <div v-scroll.self="onScroll" class="h-[530px] overflow-y-auto relative" ref="scrollContainer"
                                 max-height="530">
                                 <div class="flex min-h-full relative">
                                     <!-- 消息列表 -->
@@ -989,9 +1721,28 @@ socket.on('applyGroupEdit', (data) => {
                                                     }}
                                                         <span class="text-xs">{{ intlFormatDistance(new
                                                             Date(msg.msg.createdAt), new Date()) }}</span> </small>
-                                                    <v-sheet color="rgb(242,246,250)" rounded
-                                                        class="rounded-md px-3 py-2 mb-1 max-w-[90%]">
+                                                    <v-sheet v-if="msg.msg.type == 'message'" color="rgb(242,246,250)"
+                                                        rounded class="rounded-md px-3 py-2 mb-1 max-w-[90%]">
                                                         <p class="text-body-1 w-auto">{{ msg.msg.content }}</p>
+                                                        <!-- <p class="text-body-1 w-auto">{{ decryptMessage(msg.msg) }}</p> -->
+                                                    </v-sheet>
+                                                    <v-sheet v-if="msg.msg.type == 'image'" rounded
+                                                        class="rounded-md mb-1 max-w-[90%]">
+                                                        <a :href="(msg.msg.status == 'pending' ? '' : baseUrl) + msg.msg.content"
+                                                            data-fancybox="gallery" :data-caption="msg.msg.fileName">
+                                                            <img class="rounded-lg mb-2"
+                                                                :src="(msg.msg.status == 'pending' ? '' : baseUrl) + msg.msg.content"
+                                                                width="152">
+                                                        </a>
+                                                        <template v-if="msg.me">
+                                                            <v-chip size="x-small" v-if="msg.msg.status == 'accepted'">
+                                                                发送成功
+                                                            </v-chip>
+                                                            <v-chip v-else size="x-small">
+                                                                发送中...
+                                                            </v-chip>
+                                                        </template>
+
                                                     </v-sheet>
                                                 </div>
                                             </div>
@@ -1001,7 +1752,7 @@ socket.on('applyGroupEdit', (data) => {
                                     <!-- 右侧文件 -->
                                     <div v-if="media"
                                         class="w-[320px] border-l border-[rgb( 229,234,239)] sticky top-0 flex-shrink-0 overflow-y-auto h-[530px]"
-                                        v-scroll.self="onScroll" max-height="530">
+                                        max-height="530">
                                         <v-sheet>
                                             <div class="p-6">
                                                 <h6 class="mb-3 text-base font-semibold"
@@ -1035,7 +1786,7 @@ socket.on('applyGroupEdit', (data) => {
                                     <!-- 群聊 右侧群公告/群成员 -->
                                     <div v-if="targetUser.tab == 'groups'"
                                         class="w-[200px] border-l border-[rgb( 229,234,239)] sticky top-0 flex-shrink-0 overflow-y-auto h-[530px]"
-                                        v-scroll.self="onScroll" max-height="530">
+                                        max-height="530">
                                         <v-sheet>
                                             <div class="p-4 px-4">
                                                 <h6 class="mb-3 text-base  font-medium px-2"
@@ -1097,8 +1848,9 @@ socket.on('applyGroupEdit', (data) => {
                                     <path d="M9.5 15a3.5 3.5 0 0 0 5 0"></path>
                                 </svg>
                             </v-btn>
-                            <v-text-field v-model="message" type="text" variant="plain" @keydown.enter="send"
-                                density="compact" single-line hide-details class="shadow-none mx-2"></v-text-field>
+                            <v-text-field v-model="message" @paste="handlePaste" color="info" type="text" variant="outlined"
+                                @keydown.enter="send" density="compact" single-line hide-details
+                                class="shadow-none mx-2"></v-text-field>
                             <v-btn variant="plain" @click="send" icon>
                                 <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-send"
                                     width="20px" height="20px" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"
@@ -1109,7 +1861,8 @@ socket.on('applyGroupEdit', (data) => {
                                     </path>
                                 </svg>
                             </v-btn>
-                            <v-btn variant="plain" icon>
+                            <!-- 图片 -->
+                            <v-btn :variant="sendImage ? 'tonal' : 'plain'" icon @click="sendImage = !sendImage">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-photo"
                                     width="20px" height="20px" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"
                                     fill="none" stroke-linecap="round" stroke-linejoin="round">
@@ -1120,6 +1873,7 @@ socket.on('applyGroupEdit', (data) => {
                                     <path d="M14 14l1 -1a3 5 0 0 1 3 0l2 2"></path>
                                 </svg>
                             </v-btn>
+                            <!-- 文件 -->
                             <v-btn variant="plain" icon>
                                 <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-paperclip"
                                     width="20px" height="20px" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"
@@ -1131,6 +1885,27 @@ socket.on('applyGroupEdit', (data) => {
                                 </svg>
                             </v-btn>
                         </div>
+                        <hr>
+                        <v-sheet class="w-full p-2" v-if="sendImage || images.length > 0">
+                            <v-file-input v-model="files" @update:modelValue="imageUpdate" color="info" counter label="图像"
+                                min-heigth="100" multiple placeholder="Select your files" prepend-icon="" variant="outlined"
+                                :show-size="2000">
+                                <template v-slot:selection="{ fileNames, totalBytes, totalBytesReadable }">
+                                    <div class="grid grid-cols-6 gap-2">
+                                        <template v-for="(fileName, index) in fileNames" :key="fileName">
+                                            <div class="flex flex-col w-full">
+                                                <v-img height="99" rounded="small" min-width="99"
+                                                    :src="images[index]"></v-img>
+
+                                                <v-chip color="deep-purple-accent-4" label size="small" class="me-2">
+                                                    {{ fileName }}
+                                                </v-chip>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </template>
+                            </v-file-input>
+                        </v-sheet>
                     </div>
                 </div>
                 <!-- 联系人 列表-->
@@ -1168,7 +1943,8 @@ socket.on('applyGroupEdit', (data) => {
                                             <div class="flex gap-2">
                                                 <v-select single-line label="Select" density="compact" hide-details
                                                     color="info" v-model="applyForm.userGroup" :items="selectgroups"
-                                                    item-title="name" item-value="id" variant="outlined" return-object></v-select>
+                                                    item-title="name" item-value="id" variant="outlined"
+                                                    return-object></v-select>
                                                 <v-btn icon="mdi-plus" variant="tonal" rounded="lg"></v-btn>
                                             </div>
                                         </v-sheet>
@@ -1233,6 +2009,7 @@ socket.on('applyGroupEdit', (data) => {
                                     v-model="searchKey"></v-text-field>
 
                                 <v-sheet class="h-[399px] overflow-auto mt-2">
+                                    <!-- 查到的人列表 -->
                                     <v-list v-if="userOrGroup.users">
                                         <v-list-subheader v-if="userOrGroup.users.length > 0">查找人</v-list-subheader>
 
@@ -1258,6 +2035,7 @@ socket.on('applyGroupEdit', (data) => {
                                         </v-list-item>
                                     </v-list>
                                     <hr>
+                                    <!-- 查到的群列表 -->
                                     <v-list v-if="userOrGroup.groups">
                                         <v-list-subheader v-if="userOrGroup.groups.length > 0">查找群</v-list-subheader>
 
@@ -1287,6 +2065,72 @@ socket.on('applyGroupEdit', (data) => {
                             </v-card-text>
                         </v-card>
                     </v-overlay>
+                    <!-- 发起群聊 -->
+                    <v-overlay v-model="overlayGroup" contained class="align-center justify-center">
+                        <!-- 申请添加好友 -->
+                        <v-overlay v-model="selectFriend" contained class="align-center justify-center">
+                            <v-card class="min-w-[300px] pb-4">
+                                <v-card-title>
+                                    <span class="text-sm">选择好友</span>
+                                </v-card-title>
+                                <v-card-text>
+                                    <template v-for="friend in friends11">
+                                        <v-checkbox v-model="createGroupData.friends" :value="friend.user">
+                                            <template v-slot:label>
+                                                <v-avatar size="40px" class="mx-4">
+                                                    <v-img v-if="friend.user.avatar" alt="Avatar" cover
+                                                        :src="baseUrl + friend.user.avatar.url"></v-img>
+                                                    <v-icon v-else></v-icon>
+                                                </v-avatar>
+                                                {{ friend.user.name }}
+                                            </template>
+                                        </v-checkbox>
+                                    </template>
+                                </v-card-text>
+                                <v-card-actions class="pr-5">
+                                    <v-spacer></v-spacer>
+                                    <!-- <v-btn class="mr-2" variant="tonal" @click="selectFriend = false">
+                                        取消
+                                    </v-btn> -->
+                                    <v-btn color="info" variant="tonal" @click="selectFriend = false">
+                                        确认
+                                    </v-btn>
+                                </v-card-actions>
+                            </v-card>
+                        </v-overlay>
+                        <v-card class="min-w-[350px] relative">
+                            <v-card-title>
+                                <span class="text-lg">发起群聊</span>
+                            </v-card-title>
+                            <hr>
+                            <v-card-text>
+                                <v-sheet class="px-1">
+                                    <div class="text-sm mb-2 pl-2">名称</div>
+                                    <v-text-field :loading="loading" density="compact" variant="outlined" label="群聊名称"
+                                        single-line hide-details @click:append-inner="searchUserOrGroup" color="info"
+                                        @keydown.enter="searchUserOrGroup" v-model="createGroupData.name"></v-text-field>
+                                </v-sheet>
+                                <v-sheet class="px-1 mt-4">
+                                    <div class="text-sm mb-2 pl-2">描述</div>
+                                    <v-textarea variant="outlined" hide-details density="compact" color="info" single-line
+                                        autocomplete v-model="createGroupData.description"></v-textarea>
+                                </v-sheet>
+                                <v-sheet class="px-1 mt-4">
+                                    <v-btn @click="selectFriend = true">选择好友</v-btn>
+                                    {{ createGroupData.friends.map((friend) => friend.name) }}
+                                </v-sheet>
+                            </v-card-text>
+                            <v-card-actions class="pr-5">
+                                <v-spacer></v-spacer>
+                                <v-btn class="mr-2" variant="tonal" @click="overlayGroup = false">
+                                    取消
+                                </v-btn>
+                                <v-btn color="info" variant="tonal" @click="createGroup">
+                                    确定
+                                </v-btn>
+                            </v-card-actions>
+                        </v-card>
+                    </v-overlay>
                     <!-- left 联系人/群列表 -->
                     <div
                         class="border-l border-r border-r-[rgb(229,234,239)] flex-shrink-0 min-h-[500px] w-[350px] transition-all duration-100">
@@ -1306,7 +2150,7 @@ socket.on('applyGroupEdit', (data) => {
                                                 <v-btn v-bind="props" icon="mdi-plus" variant="tonal" rounded="lg"></v-btn>
                                             </template>
                                             <v-list v-list nav density="compact">
-                                                <v-list-item>
+                                                <v-list-item @click="() => {overlayGroup = true; createGroupData.friends = []}">
                                                     发起群聊
                                                 </v-list-item>
                                                 <v-list-item @click="overlay = true">
@@ -1316,8 +2160,7 @@ socket.on('applyGroupEdit', (data) => {
                                         </v-menu>
                                     </div>
                                     <!-- 好友通知,群通知 -->
-                                    <v-list @click:select="changeApply" v-list nav class="px-0"
-                                        density="compact">
+                                    <v-list @click:select="changeApply" v-list nav class="px-0" density="compact">
                                         <v-list-item value="friend">
                                             好友通知
                                             <template v-slot:append>
@@ -1565,11 +2408,12 @@ socket.on('applyGroupEdit', (data) => {
                                                 <span class="text-info mr-2">{{ user.user.name }}</span>
                                                 <template v-if="user.me">
                                                     <span v-if="user.message.status == 'pending'">正在验证你的邀请</span>
-                                                    <span v-else-if="user.message.status =='accepted'">同意了你的邀请</span>
+                                                    <span v-else-if="user.message.status == 'accepted'">同意了你的邀请</span>
                                                     <span v-else>拒绝了你的邀请</span>
                                                 </template>
                                                 <span v-else>请求加为好友</span>
-                                                <span class="ml-2" v-if="user.message">{{ format(new Date(user.message.createdAt),
+                                                <span class="ml-2" v-if="user.message">{{ format(new
+                                                    Date(user.message.createdAt),
                                                     'yyyy/MM/dd HH:mm') }}</span>
                                             </div>
                                         </template>
@@ -1578,8 +2422,8 @@ socket.on('applyGroupEdit', (data) => {
                                         </template>
                                         <template v-slot:append>
                                             <!-- 接收者 同意还是拒绝 -->
-                                            <v-menu v-if="!user.me && user.message.status == 'pending'"
-                                                v-model="user.menu" :close-on-content-click="false" location="end">
+                                            <v-menu v-if="!user.me && user.message.status == 'pending'" v-model="user.menu"
+                                                :close-on-content-click="false" location="end">
                                                 <template v-slot:activator="{ props }">
                                                     <v-btn icon="mdi-dots-horizontal" v-bind="props"></v-btn>
                                                 </template>
@@ -1590,8 +2434,7 @@ socket.on('applyGroupEdit', (data) => {
                                                             <v-list-item>
                                                                 <template v-slot:prepend>
                                                                     <v-avatar size="60px">
-                                                                        <v-img v-if="user.user.avatar" alt="Avatar"
-                                                                            cover
+                                                                        <v-img v-if="user.user.avatar" alt="Avatar" cover
                                                                             :src="baseUrl + user.user.avatar.url"></v-img>
                                                                         <v-icon v-else></v-icon>
                                                                     </v-avatar>
@@ -1611,8 +2454,8 @@ socket.on('applyGroupEdit', (data) => {
                                                         <div class="flex gap-2">
                                                             <v-select single-line label="Select" density="compact"
                                                                 hide-details color="info" v-model="applyReceiveUserGroup"
-                                                                :items="selectgroups" item-title="name"
-                                                                item-value="id" variant="outlined" return-object></v-select>
+                                                                :items="selectgroups" item-title="name" item-value="id"
+                                                                variant="outlined" return-object></v-select>
                                                             <v-btn icon="mdi-plus" variant="tonal" rounded="lg"></v-btn>
                                                         </div>
                                                     </v-card-text>
@@ -1669,14 +2512,15 @@ socket.on('applyGroupEdit', (data) => {
                                         <template v-slot:title>
                                             <div>
                                                 <template v-if="note.me">
-                                                    <span class="text-info mr-2">{{ note.message.group.name}}</span>
+                                                    <span class="text-info mr-2">{{ note.message.group.name }}</span>
                                                     <span v-if="note.message.status == 'pending'">正在验证你的入群申请</span>
                                                     <span v-else-if="note.message.status == 'accepted'">同意了你的入群申请</span>
                                                     <span v-else>拒绝了你的入群申请</span>
                                                 </template>
                                                 <template v-else>
                                                     <span class="text-info mr-2">{{ note.message.sender.name }}</span>
-                                                    <span >请求加入群 <span class="text-info">{{ note.message.group.name }}</span></span>
+                                                    <span>请求加入群 <span class="text-info">{{ note.message.group.name
+                                                    }}</span></span>
                                                 </template>
                                                 <span class="ml-2">{{ format(new Date(note.message.createdAt),
                                                     'yyyy/MM/dd HH:mm') }}</span>
@@ -1684,12 +2528,13 @@ socket.on('applyGroupEdit', (data) => {
                                         </template>
                                         <template v-slot:subtitle>
                                             <div class="mt-1">留言：{{ note.message.content }}</div>
-                                            <div class="text-info" v-if="note.groupMember.operator">操作人：{{ note.groupMember.operator.name}}</div>
+                                            <div class="text-info" v-if="note.groupMember.operator">操作人：{{
+                                                note.groupMember.operator.name }}</div>
                                         </template>
                                         <template v-slot:append>
                                             <!-- 接收者 同意还是拒绝 -->
-                                            <v-menu v-if="!note.me && note.message.status == 'pending'"
-                                                v-model="note.menu" :close-on-content-click="false" location="end">
+                                            <v-menu v-if="!note.me && note.message.status == 'pending'" v-model="note.menu"
+                                                :close-on-content-click="false" location="end">
                                                 <template v-slot:activator="{ props }">
                                                     <v-btn icon="mdi-dots-horizontal" v-bind="props"></v-btn>
                                                 </template>
@@ -1699,15 +2544,16 @@ socket.on('applyGroupEdit', (data) => {
                                                             <v-list-item>
                                                                 <template v-slot:prepend>
                                                                     <v-avatar size="60px">
-                                                                        <v-img v-if="note.message.sender.avatar" alt="Avatar"
-                                                                            cover
+                                                                        <v-img v-if="note.message.sender.avatar"
+                                                                            alt="Avatar" cover
                                                                             :src="baseUrl + note.message.sender.avatar.url"></v-img>
                                                                         <v-icon v-else></v-icon>
                                                                     </v-avatar>
                                                                 </template>
                                                                 <template v-slot:title>
                                                                     <div>
-                                                                        <span class="text-info mr-2">{{ note.message.sender.name
+                                                                        <span class="text-info mr-2">{{
+                                                                            note.message.sender.name
                                                                         }}</span>
                                                                     </div>
                                                                 </template>
@@ -1760,4 +2606,5 @@ socket.on('applyGroupEdit', (data) => {
 
 .expan .v-expansion-panel-text__wrapper {
     padding: 0px 0 8px;
-}</style>
+}
+</style>
