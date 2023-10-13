@@ -119,7 +119,6 @@ const message = ({message, timeout1}) => {
     text.value = message,
     timeout.value = timeout1
 }
-const visible = ref(false)
 </script>
 
 <template>
@@ -149,16 +148,12 @@ const visible = ref(false)
                             <v-text-field density="compact" v-model="user.identifier" :rules="[rules.usernamerequired]"
                                 variant="outlined" class="mb-6"></v-text-field>
                             <label class="v-label pb-2">Password</label>
-                            <v-text-field
-                            :append-inner-icon="visible ? 'mdi-eye-off' : 'mdi-eye'"
-                            :type="visible ? 'text' : 'password'"
-                            @click:append-inner="visible = !visible"
-                            density="compact" type="password" @keydown.enter="submit" v-model="user.password"
+                            <v-text-field density="compact" type="password" @keydown.enter="submit" v-model="user.password"
                                 :rules="[rules.passwordrequired]" variant="outlined"></v-text-field>
                             <div class="flex flex-wrap items-center my-3 -ml-2">
                                 <v-checkbox color="info" hide-details label="Remeber this Devide"></v-checkbox>
                                 <div class="ml-auto">
-                                    <a class="text-info font-medium" href="/forgot-password">Forgot Password?</a>
+                                    <!-- <a class="text-info font-medium" href="/">Forgot Password?</a> -->
                                 </div>
                             </div>
                             <v-btn @click="submit" block class="text-none text-subtitle-1" size="large" variant="flat"

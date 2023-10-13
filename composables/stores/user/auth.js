@@ -9,19 +9,22 @@ export const useAuthStore = defineStore('auth', {
     actions: {
         // 登录
         login(formData) {
+            const apiBase = useRuntimeConfig().public.apiBase
             return new Promise(async (resolve, reject) => {
-                const { data, error } = await useFetch(`http://localhost:1337/api/auth/local`, {
+                const { data, error } = await useFetch(`${apiBase}/auth/local`, {
                     body: formData,
                     method: 'POST'
                 })
                 if (error.value) {
-                    console.error(error.value.data.error)
-                    reject(error.value)
+                    console.log(error.value.data.error, '2323')
+                    reject(error.value.data.error)
                 }
-                // console.log(data.value)
-                this.user = data.value.user
-                this.token = data.value.jwt
-                resolve(data.value)
+                if(data.value) {
+                    // console.log(data.value)
+                    this.user = data.value.user
+                    this.token = data.value.jwt
+                    resolve(data.value)
+                }
             })
         },
         // 登出

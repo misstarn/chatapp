@@ -12,6 +12,7 @@
   "devDependencies": {
     "@invictus.codes/nuxt-vuetify": "^0.3.0",
     "@nuxt/devtools": "latest",
+    "@nuxtjs/device": "^3.1.1",
     "@nuxtjs/tailwindcss": "^6.8.0",
     "@pinia-plugin-persistedstate/nuxt": "^1.1.2",
     "material-design-icons-iconfont": "^6.7.0",
@@ -25,6 +26,6 @@
     "pinia": "^2.1.6",
     "qs": "^6.11.2",
     "socket.io-client": "^4.7.2",
-    "vuetify": "^3.3.16"
+    "vuetify": "^3.3.20"
   }
 }

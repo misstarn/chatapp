@@ -12,7 +12,7 @@ export const history11 = (data) => {
         if(error.value) {
             reject(error.value)
         }
-        console.log(data)
+        // console.log(data)
         resolve(data)
     })
 }
@@ -29,10 +29,50 @@ export const register = (formData) => {
 
         console.log(error)
         if(error.value) {
-            reject(error.value)
+            reject(error.value.data.error)
         }
-        console.log(data)
+        // console.log(data)
         resolve(data)
+    })
+}
+
+// 忘记密码
+export const forgotPassword = (email) => {
+    const config = useRuntimeConfig()
+    return new Promise(async (resolve, reject) => {
+        const { data, error } = await useFetch('/auth/forgot-password', {
+            baseURL: config.public.apiBase,
+            method: 'POST',
+            body: {
+                email: email
+            }
+        })
+
+        console.log(error)
+        if(error.value) {
+            reject(error.value.data.error)
+        }
+        // console.log(data)
+        resolve(data.value)
+    })
+}
+
+// 重置密码
+export const resetPassword = (formData) => {
+    const config = useRuntimeConfig()
+    return new Promise(async (resolve, reject) => {
+        const { data, error } = await useFetch('/auth/reset-password', {
+            baseURL: config.public.apiBase,
+            method: 'POST',
+            body: formData
+        })
+
+        console.log(error)
+        if(error.value) {
+            reject(error.value.data.error)
+        }
+        // console.log(data)
+        resolve(data.value)
     })
 }
 
@@ -54,7 +94,7 @@ export const lastUser = () => {
         if(error.value) {
             reject(error.value)
         }
-        console.log(data)
+        // console.log(data)
         resolve(data)
     })
 }
@@ -75,7 +115,7 @@ export const createUserGroup = (formData) => {
         if(error.value) {
             reject(error.value)
         }
-        console.log(data)
+        // console.log(data)
         resolve(data)
     })
 }

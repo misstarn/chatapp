@@ -3,9 +3,11 @@ export const upload = (file) => {
     const formData = new FormData()
     formData.append('files', file)
 
-    console.log(formData)
+    // console.log(formData)
+    const apiBase = useRuntimeConfig().public.apiBase
     return new Promise(async (resolve, reject) => {
-        const {data, error} = await useFetch('http://localhost:1337/api/upload', {
+        const {data, error} = await useFetch(`/upload`, {
+            baseURL: apiBase,
             body: formData,
             method: 'POST'
         })
@@ -13,7 +15,7 @@ export const upload = (file) => {
         if(error.value) {
             reject(error.value)
         }
-        console.log(data)
+        // console.log(data)
         resolve(data)
     })
 }
