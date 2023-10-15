@@ -103,6 +103,71 @@ socket.on('groups', (data) => {
     // console.log(groups.value)
 })
 
+const db = ref(null)
+
+const openDatabase = async () => {
+
+    // 打开或创建数据库
+    const request = indexedDB.open(`${user.username}-db`, 3);
+
+    request.onupgradeneeded = (event) => {
+        const db = event.target.result;
+
+        const objectSotre = db.createObjectStore('messages', { autoIncrement: true })
+
+        objectSotre.createIndex('uid', 'uid', { unique: false })
+        objectSotre.createIndex('createdAt', 'createdAt', { unique: false })
+    }
+
+    request.onsuccess = (event) => {
+        db.value = event.target.result
+    }
+}
+
+const insertMessage = async (message) => {
+    if (!db.value) {
+        // 如果数据库未打开，先打开它
+        await openDatabase()
+    }
+    let status = false
+    // 创建事务
+    const transaction = db.value.transaction(['messages'], 'readwrite')
+
+    transaction.oncomplete = () => {
+        // 事务成功完成
+        console.log('完成.');
+    };
+
+    transaction.onerror = (event) => {
+        // 事务出错
+        console.error('出错:', event.target.error);
+    };
+    if (!status) {
+
+        const messageStore = transaction.objectStore('messages')
+        const msg = messageStore.add({
+            ...message,
+        })
+
+        msg.onsuccess = () => {
+            console.log('值已插入')
+            // 提交事务
+            transaction.oncomplete = () => {
+                console.log('事务已提交')
+            }
+        }
+        status = true
+    }
+
+
+}
+
+onMounted(() => {
+    // 执行数据库初始化
+    openDatabase()
+})
+
+
 // 好友组列表和好友
 const userGroupMembers = ref([])
 
@@ -112,14 +177,15 @@ socket.on('userGroup', (data) => {
     friends11.value = []
     const da = data.map(d => {
         const ugm = d.user_group_members.filter(item => item.user.online == true)
+
         return {
-            ...d,
+            ...d, 
             onlineCount: ugm.length
         }
     })
     userGroupMembers.value = da
 
-    // 好友组列表初始化
+    // 好友组选择项初始化
     selectgroups.value = da.map(ugm => {
         friends11.value = [...friends11.value, ...ugm.user_group_members]
         const group = {
@@ -151,6 +217,134 @@ socket.on('disconnect', (reason) => {
         socket.connect()
     }
     // console.log(socket.id)
+})
+
+// 接收离线消息
+socket.on('offlineMessages', async (data) => {
+    // console.log(data)
+    const messages = data.map((message) => {
+        if (message.isGroupMessage) {
+            return {
+                user: {
+                    avatar: message.sender.avatar,
+                    id: message.sender.id,
+                    name: message.sender.name,
+                    uid: message.group.uid,
+                    username: message.group.groupname
+                },
+                me: false,
+                msg: {
+                    content: message.content,
+                    createdAt: message.createdAt,
+                    fileName: message.fileName,
+                    isGroupMessage: message.isGroupMessage,
+                    iv: message.iv,
+                    jwk_key: message.jwk_key,
+                    type: message.type,
+                    status: message.status
+                },
+                uid: message.group.uid,
+                createdAt: message.createdAt,
+                isGroupMessage: message.isGroupMessage,
+                isRead: false
+            }
+        } else {
+            return {
+                user: {
+                    avatar: message.sender.avatar,
+                    id: message.sender.id,
+                    name: message.sender.name,
+                    uid: message.sender.uid,
+                    username: message.sender.username
+                },
+                me: false,
+                msg: {
+                    content: message.content,
+                    createdAt: message.createdAt,
+                    fileName: message.fileName,
+                    isGroupMessage: message.isGroupMessage,
+                    iv: message.iv,
+                    jwk_key: message.jwk_key,
+                    type: message.type,
+                    status: message.status
+                },
+                uid: message.sender.uid,
+                createdAt: message.createdAt,
+                isGroupMessage: message.isGroupMessage,
+                isRead: false
+            }
+        }
+
+    })
+    // console.log(messages)
+
+    // 保存消息记录
+
+    const userGroups = userGroupMembers.value.flatMap(userGroup => userGroup.user_group_members)
+
+    // console.log(userGroups)
+    // 所有用户组的用户
+    const friends22 = userGroups.map((usergroup) => ({
+        ...usergroup.user,
+        friendship: usergroup.friendship,
+        count: 0,
+        tab: 'friends'
+    }))
+
+    // 所有群
+    const groups22 = groups.value.map((group) => ({
+        ...group,
+        count: 0,
+        tab: 'groups'
+    }))
+
+    // console.log(groups22, friends22)
+
+    for (let i = 0; i < messages.length; i++) {
+        await insertMessage(JSON.parse(JSON.stringify(messages[i])))
+
+        const lastM = await decryptMessage(messages[i].msg)
+        // 接收消息的
+        let current = getFriend(messages[i].user)
+
+        if (current) {
+            // 最近消息
+            current.lastMsg = {
+                // content: message.msg.content,
+                username: messages[i].user.name,
+                content: lastM,
+                type: messages[i].msg.type,
+                createdAt: messages[i].msg.createdAt
+            }
+            current.count = current.count + 1
+        } else {
+            if (messages[i].isGroupMessage) {
+                current = groups22.find((group) => group.uid == messages[i].user.uid)
+            } else {
+                current = friends22.find((user) => user.uid == messages[i].user.uid)
+            }
+            // 最近消息
+            current.lastMsg = {
+                // content: message.msg.content,
+                username: messages[i].user.name,
+                content: lastM,
+                type: messages[i].msg.type,
+                createdAt: messages[i].msg.createdAt
+            }
+            current.count = current.count + 1
+
+            console.log(current)
+
+            friends.value.push(current)
+
+        }
+
+        // 添加到消息列表并更新
+        msgStore.$patch({
+            friends: friends.value
+        })
+    }
+
 })
 
 
@@ -204,74 +398,61 @@ onMounted(() => {
 
 
 
+let lists = ref([])
+const start = ref(0)
+const limit = ref(15)
+const messagesCount = ref(0)  //计数器用于跟踪已获取的消息
 
 // 获取历史消息
-const getHistory = async (start) => {
+const getHistory = async (start1) => {
+    // console.log(start1, messages.value)
 
+    start.value = start1 // 起始
+    messagesCount.value = 0 //计数器
+
+    lists.value = []
     // console.log(start, targetUser.value, '000000000')
 
-    let filters = {}
-    if (targetUser.value.tab == 'friends') {
-        filters = {
-            friendship: {
-                id: targetUser.value.friendship.id
-            }
-        }
-    } else {
-        filters = {
-            group: {
-                id: targetUser.value.id
-            },
-            isGroupMessage: true
-        }
-    }
-    const params = {
-        filters: filters,
-        sort: {
-            createdAt: 'desc'
-        },
-        pagination: {
-            start: start,
-            limit: 15
-        },
-        populate: {
-            sender: {
-                // 显示过滤
-                fields: userFilter,
-                populate: {
-                    avatar: {
-                        fields: ['url']
-                    }
-                }
-            },
-            receiver: {
-                fields: userFilter,
-                populate: {
-                    avatar: {
-                        fields: ['url']
-                    }
-                }
-            }
-        }
+    const uid = targetUser.value.uid
 
+    if (!db.value) {
+        await openDatabase()
     }
 
-    await history11(params).then(res => {
-        // console.log(res.value.data, currentUser.value, '1123')
+    const transaction = db.value.transaction(["messages"]);
+    const request = transaction
+        .objectStore("messages")
+        .index('createdAt')
+        .openCursor(null, 'prev')
 
-        if (res) {
-            res.value.data.forEach(message => {
-                const d = {
-                    msg: message.attributes,
-                    user: message.attributes.sender.data.attributes,
-                    me: currentUser.value.id === message.attributes.sender.data.id ? true : false,
+    request.onsuccess = async (event) => {
+        const cursor = event.target.result
+
+        if (cursor && messagesCount.value < limit.value) {
+            if (cursor.value.uid === uid) {
+                // 还没达到起始地址
+                if (start.value > 0) {
+                    start.value--
+                } else {
+                    // 当前消息在限制范围
+                    lists.value.push(cursor.value)
+                    messagesCount.value++
                 }
-                d.user.avatar.url = d.user.avatar.data.attributes.url
-                updateMsg(d)
-            });
+            }
+            cursor.continue()
+        } else {
+            // 获取了指定的所有消息
+            // console.log(lists.value, limit.value, start.value)
+            for (let k = 0; k < lists.value.length; k++) {
+
+                await updateMsg(lists.value[k])
+            }
         }
-    })
+    }
+
+    // 
 }
+
 
 
 // 生成随机的 IV（初始化向量）
@@ -446,6 +627,7 @@ const send = async () => {
 
     // 发送文件
     if (files.value) {
+        console.log(files.value)
         for (let i = 0; i < files.value.length; i++) {
             // 单独发送
             const message = {
@@ -458,7 +640,7 @@ const send = async () => {
                     content: images.value[i],
                     status: 'pending',
                 },
-                name: files.value[i].name
+                filename: files.value[i].name
             }
             messages.value.push(message)
             // console.log(messages.value.length)
@@ -473,7 +655,8 @@ const send = async () => {
                 // 将iv转换为字符串
                 const ivString22 = unit8ArrayToHex(iv11)
 
-                // 发送消息
+                // 上传成功后发送消息
+                console.log('发送')
                 socket.emit('privateMessage', {
                     targetUser: targetUser.value,
                     message: dataString22,
@@ -483,18 +666,7 @@ const send = async () => {
                     fileName: res.value[0].name,
                     fileId: res.value[0].id
                 })
-                if (res.value) {
-                    messages.value.forEach(msg => {
-                        if (msg.name == files.value[i].name && res.value[0].name == files.value[i].name) {
-                            // console.log(msg)
-                            msg.msg.content = res.value[0].url
-                            msg.msg.status = 'accepted'
-                        }
-                        scrollToBottom()
-                        // console.log(res.value, msg)
-                    })
 
-                }
             })
 
         }
@@ -521,11 +693,12 @@ const logout = () => {
     socket.disconnect()
 }
 
-// 监听返回私人消息
+// 监听返回私聊消息
 socket.on('receivePrivateMessage', async (message) => {
-    // 展示私人消息
-    // console.log(message.msg, message.user)
 
+    // 展示私人消息
+    console.log('返回私聊')
+    console.log(message, message.user)
     const msg = message.msg
 
     // 将加密消息字符串转换为arryBuffer加密消息
@@ -550,6 +723,20 @@ socket.on('receivePrivateMessage', async (message) => {
 
     }
 
+    // 将图片消息状态修改为完成
+    if (message.msg.type == 'image') {
+        msg.status = 'accepted'
+    }
+
+    // 保存消息记录
+    await insertMessage(JSON.parse(JSON.stringify({
+        ...message,
+        uid: message.user.uid,
+        createdAt: message.msg.createdAt,
+        isGroupMessage: message.msg.isGroupMessage,
+        isRead: false
+    })))
+
     // 将消息解密出来放入最后一条记录
     const lastM = await decryptMessage(message.msg)
 
@@ -561,6 +748,27 @@ socket.on('receivePrivateMessage', async (message) => {
     let friend = getFriend(message.user)
 
     // console.log(friend)
+
+    const userGroups = userGroupMembers.value.flatMap(userGroup => userGroup.user_group_members)
+
+    // console.log(userGroups)
+    // 所有用户组的用户
+    const friends22 = userGroups.map((usergroup) => ({
+        ...usergroup.user,
+        friendship: usergroup.friendship,
+        count: 0,
+        tab: 'friends'
+    }))
+
+    // 所有群
+    const groups22 = groups.value.map((group) => ({
+        ...group,
+        count: 0,
+        tab: 'groups'
+    }))
+
+    // console.log(groups22, friends22)
+
     if (friend) {
         friend.lastMsg = {
             // content: message.msg.content,
@@ -570,6 +778,30 @@ socket.on('receivePrivateMessage', async (message) => {
             createdAt: message.msg.createdAt
         }
     } else {
+        // 接收消息的
+        let current
+        if (message.msg.isGroupMessage) {
+            current = groups22.find((group) => group.uid == message.user.uid)
+        } else {
+            current = friends22.find((user) => user.uid == message.user.uid)
+        }
+        // 最近消息
+        current.lastMsg = {
+            // content: message.msg.content,
+            username: message.user.name,
+            content: lastM,
+            type: message.msg.type,
+            createdAt: message.msg.createdAt
+        }
+
+        console.log(current)
+
+        friends.value.push(current)
+        // 添加到消息列表并更新
+        msgStore.$patch({
+            friends: friends.value
+        })
+
         // 发送方,查看接收方,更新最后消息
         friend = getFriend(targetUser.value)
         if (friend) {
@@ -582,9 +814,18 @@ socket.on('receivePrivateMessage', async (message) => {
         }
     }
 
+
     if (message.me || !message.me && message.user.id == targetUser.value.id) {
         // 更新消息列表查看
-        updateMsg2(message)
+        if (message.msg.type == 'image' && message.me) {
+            const msg = messages.value.find((message11) => message11.filename == message.msg.fileName)
+            msg.msg.content = lastM
+            msg.msg.status = 'accepted'
+            console.log(msg, messages.value)
+            scrollToBottom()
+        } else {
+            updateMsg2(message)
+        }
     } else {
         // 存储未读消息
         storeMessageForLaterUser(message)
@@ -846,14 +1087,9 @@ const getMsgH = async (targetUser) => {
     }
 
     await getHistory(0)
+
+    // console.log(lists.value)
     scrollToBottom()
-    return
-    // 请求消息历史
-    // socket.emit('history', {
-    //     targetUser: targetUser,
-    //     currentUser: currentUser.value,
-    //     start: 0
-    // })
 
 }
 
@@ -864,7 +1100,7 @@ const showDetail = ref(false)
 // 选择好友/群聊,点击查看详情
 const selectDetail = (val) => {
 
-    // console.log(val.id, tab.value)
+    console.log(val)
 
     // 设置详细信息
     if (tab.value == 'groups') { //群详情
@@ -873,6 +1109,7 @@ const selectDetail = (val) => {
             tab: tab.value
         }
     } else { //好友
+
         const data = {
             ...val.id.user,
             friendship: val.id.friendship,
@@ -880,6 +1117,7 @@ const selectDetail = (val) => {
                 new Date(),
                 new Date(val.id.user.birthday)
             ),
+            usergroupmemberId: val.id.id,
             tab: tab.value
         }
 
@@ -898,7 +1136,7 @@ const selectDetail = (val) => {
 
 // 发起聊天，进入消息列表页
 const chat = () => {
-    // console.log(detail.value)
+    console.log(detail.value)
     const friend = getFriend(detail.value)
     if (friend) {
 
@@ -925,10 +1163,10 @@ const tabChange = (val) => {
 // 获取对应的朋友
 const getFriend = (user) => {
     // console.log(user)
-    if (user.username) {
-        return friends.value.find(friend => friend.username === user.username)
+    if (user.uid) {
+        return friends.value.find(friend => friend.uid === user.uid)
     } else {
-        return friends.value.find(friend => friend.groupname === user.groupname)
+        return friends.value.find(friend => friend.uid === user.uid)
     }
 }
 
@@ -953,11 +1191,11 @@ socket.on('historyMsgs', (data) => {
 
 
 // 登录上线
-socket.on('online', ({ username }) => {
+socket.on('online', ({ uid }) => {
     // console.log(username)
 
     const friend = getFriend({
-        username: username
+        uid: uid
     })
     if (friend) {
         nextTick(() => {
@@ -967,10 +1205,10 @@ socket.on('online', ({ username }) => {
 })
 
 // 账号下线
-socket.on('offline', (username) => {
+socket.on('offline', (uid) => {
     // console.log(username)
     const friend = getFriend({
-        username
+        uid
     })
     if (friend) {
         nextTick(() => {
@@ -1412,7 +1650,7 @@ const snackbarText = ref('')
 const timeout = ref(2000)
 
 // 消息
-const Message = ({ type, text, timeout }) => {
+const Message = ({text, timeout }) => {
     snackbar.value = true
     snackbarText.value = text
     timeout = timeout
@@ -1491,10 +1729,43 @@ const createGroup = () => {
 
 const selectFriend = ref(false)
 
+const ddrawer = ref(false)
 
 // 
 const drawer = ref(false)
 
+// 是否删除成功
+socket.on('removeFriendReturn', (data) => {
+    console.log(data)
+    Message({
+        text: data.msg,
+        timeout: 2000
+    })
+})
+
+const deleteList = (val) => {
+    console.log(val)
+    switch (val.id) {
+        // 删除好友
+        case 'removeFriend':
+            console.log(targetUser.value)
+            socket.emit('removeFriend', {
+                friendshipId: targetUser.value.friendship.id,
+                usergroupmemberId: targetUser.value.usergroupmemberId
+            })
+            break;
+            // 离开群聊
+        case 'leaveGroup':
+            console.log(targetUser.value)
+            socket.emit('leaveGroup', {
+                group_member: targetUser.value.group_member
+            })
+            break;
+    
+        default:
+            break;
+    }
+}
 </script>
 
 
@@ -1705,88 +1976,85 @@ const drawer = ref(false)
                                     </div>
 
                                     <v-sheet v-if="input2" class="min-h-[600px]">
-                                                    <!-- 好友 -->
-                                                    <div class="px-2 mt-4">好友</div>
-                                                    <v-list @click:select="selectDetail" nav class="pt-2 pb-0">
-                                                        <v-list-item v-for="user in users2" :key="user.id" :value="user"
-                                                            active-class="active" class="px-6 py-4 cursor-pointer">
-                                                            <!-- 头像 -->
-                                                            <template v-slot:prepend>
-                                                                <v-badge dot :color="user.user.online ? 'success' : ''"
-                                                                    offset-y="32">
-                                                                    <v-avatar size="45">
-                                                                        <v-img v-if="user.user.avatar.url" cover
-                                                                            alt="Avatar"
-                                                                            :src="baseUrl + user.user.avatar.url"></v-img>
-                                                                        <v-icon v-else></v-icon>
-                                                                    </v-avatar>
-                                                                </v-badge>
-                                                            </template>
-                                                            <div>
-                                                                <div class="flex items-center">
-                                                                    <h5 class="text-sm font-semibold"
-                                                                        style="font-family: inherit!important">{{
-                                                                            user.user.name }}</h5>
-                                                                </div>
-                                                                <div class="flex items-center mt-1">
-                                                                    <h6 class="text-xs font-normal"
-                                                                        style="font-family: inherit!important">
-                                                                        {{ user.user.online ? '[在线]' : '[离线]' }}{{
-                                                                            user.user.description }}</h6>
-                                                                </div>
-                                                            </div>
-                                                        </v-list-item>
-                                                    </v-list>
-                                                    <hr>
-                                                    <!-- 群聊 -->
-                                                    <div class="px-2 mt-4">群聊</div>
-                                                    <v-list @click:select="selectDetail" nav>
-                                                        <v-list-item v-for="group in groups2" :key="group.groupname"
-                                                            :value="group" active-class="active"
-                                                            class="px-4 py-4 cursor-pointer">
-                                                            <!-- 头像 -->
-                                                            <template v-slot:prepend>
-                                                                <v-avatar size="45">
-                                                                    <v-img v-if="group.groupAvatar.url" cover alt="Avatar"
-                                                                        :src="baseUrl + group.groupAvatar.url"></v-img>
-                                                                    <v-icon v-else></v-icon>
-                                                                </v-avatar>
-                                                            </template>
-                                                            <div>
-                                                                <div class="flex items-center">
-                                                                    <h5 class="text-sm font-semibold"
-                                                                        style="font-family: inherit!important">{{ group.name
-                                                                        }}
-                                                                    </h5>
-                                                                </div>
-                                                            </div>
-                                                        </v-list-item>
-                                                    </v-list>
-                                                </v-sheet>
-                                                <v-sheet v-else>
+                                        <!-- 好友 -->
+                                        <div class="px-2 mt-4">好友</div>
+                                        <v-list @click:select="selectDetail" nav class="pt-2 pb-0">
+                                            <v-list-item v-for="user in users2" :key="user.id" :value="user"
+                                                active-class="active" class="px-6 py-4 cursor-pointer">
+                                                <!-- 头像 -->
+                                                <template v-slot:prepend>
+                                                    <v-badge dot :color="user.user.online ? 'success' : ''" offset-y="32">
+                                                        <v-avatar size="45">
+                                                            <v-img v-if="user.user.avatar.url" cover alt="Avatar"
+                                                                :src="baseUrl + user.user.avatar.url"></v-img>
+                                                            <v-icon v-else></v-icon>
+                                                        </v-avatar>
+                                                    </v-badge>
+                                                </template>
+                                                <div>
+                                                    <div class="flex items-center">
+                                                        <h5 class="text-sm font-semibold"
+                                                            style="font-family: inherit!important">{{
+                                                                user.user.name }}</h5>
+                                                    </div>
+                                                    <div class="flex items-center mt-1">
+                                                        <h6 class="text-xs font-normal"
+                                                            style="font-family: inherit!important">
+                                                            {{ user.user.online ? '[在线]' : '[离线]' }}{{
+                                                                user.user.description }}</h6>
+                                                    </div>
+                                                </div>
+                                            </v-list-item>
+                                        </v-list>
+                                        <hr>
+                                        <!-- 群聊 -->
+                                        <div class="px-2 mt-4">群聊</div>
+                                        <v-list @click:select="selectDetail" nav>
+                                            <v-list-item v-for="group in groups2" :key="group.groupname" :value="group"
+                                                active-class="active" class="px-4 py-4 cursor-pointer">
+                                                <!-- 头像 -->
+                                                <template v-slot:prepend>
+                                                    <v-avatar size="45">
+                                                        <v-img v-if="group.groupAvatar.url" cover alt="Avatar"
+                                                            :src="baseUrl + group.groupAvatar.url"></v-img>
+                                                        <v-icon v-else></v-icon>
+                                                    </v-avatar>
+                                                </template>
+                                                <div>
+                                                    <div class="flex items-center">
+                                                        <h5 class="text-sm font-semibold"
+                                                            style="font-family: inherit!important">{{ group.name
+                                                            }}
+                                                        </h5>
+                                                    </div>
+                                                </div>
+                                            </v-list-item>
+                                        </v-list>
+                                    </v-sheet>
+                                    <v-sheet v-else>
 
-                                    <!-- 好友通知,群通知 -->
-                                    <v-list @click:select="changeApply" v-list nav class="px-0" density="compact">
-                                        <v-list-item value="friend">
-                                            好友通知
-                                            <template v-slot:append>
-                                                <v-icon icon="mdi-chevron-right"></v-icon>
-                                            </template>
-                                        </v-list-item>
-                                        <v-list-item value="group">
-                                            群通知
-                                            <template v-slot:append>
-                                                <v-icon icon="mdi-chevron-right"></v-icon>
-                                            </template>
-                                        </v-list-item>
-                                    </v-list>
-                                    <!-- 切换 好友/群聊 -->
-                                    <v-tabs v-model="tab" bg-color="transparent" color="basil" grow
-                                        @update:modelValue="tabChange">
-                                        <v-tab v-for="item in tabs" :key="item.name" :value="item.name">
-                                            {{ item.title }}
-                                        </v-tab>
-                                    </v-tabs>
+                                        <!-- 好友通知,群通知 -->
+                                        <v-list @click:select="changeApply" v-list nav class="px-0" density="compact">
+                                            <v-list-item value="friend">
+                                                好友通知
+                                                <template v-slot:append>
+                                                    <v-icon icon="mdi-chevron-right"></v-icon>
+                                                </template>
+                                            </v-list-item>
+                                            <v-list-item value="group">
+                                                群通知
+                                                <template v-slot:append>
+                                                    <v-icon icon="mdi-chevron-right"></v-icon>
+                                                </template>
+                                            </v-list-item>
+                                        </v-list>
+                                        <!-- 切换 好友/群聊 -->
+                                        <v-tabs v-model="tab" bg-color="transparent" color="basil" grow
+                                            @update:modelValue="tabChange">
+                                            <v-tab v-for="item in tabs" :key="item.name" :value="item.name">
+                                                {{ item.title }}
+                                            </v-tab>
+                                        </v-tabs>
                                     </v-sheet>
                                     <hr>
                                 </div>
@@ -2194,9 +2462,9 @@ const drawer = ref(false)
                                             <div class="px-4 pt-8">
                                                 <!-- 搜索 -->
                                                 <v-text-field :loading="loading" density="compact" variant="outlined"
-                                                    label="搜索"  prepend-inner-icon="mdi-magnify" single-line hide-details
-                                                    v-model="input" @update:modelValue="changeInput" clearable @click:clear="clear"
-                                                    color="info"></v-text-field>
+                                                    label="搜索" prepend-inner-icon="mdi-magnify" single-line hide-details
+                                                    v-model="input" @update:modelValue="changeInput" clearable
+                                                    @click:clear="clear" color="info"></v-text-field>
                                                 <!-- 选项 Recent Chats-->
                                                 <v-menu transition="slide-y-transition">
                                                     <template v-slot:activator="{ props }">
@@ -2505,286 +2773,331 @@ const drawer = ref(false)
                         <div v-if="msg">
                             <!-- 右侧发送消息框，历史消息记录 -->
                             <div class="flex-1" v-if="showMsg">
-                                <div>
-                                    <!-- 右侧顶部，名字和操作按钮 -->
-                                    <div class="flex items-center gap-3 p-4 justify-between">
-                                        <div class="flex gap-4 items-center">
-                                            <!-- 私聊 -->
-                                            <v-badge v-if="targetUser.tab == 'friends'" dot
-                                                :color="targetUser.online ? 'success' : ''" offset-y="36">
-                                                <v-avatar size="50px">
-                                                    <v-img v-if="targetUser.avatar" alt="Avatar" cover
-                                                        :src="baseUrl + targetUser.avatar.url"></v-img>
-                                                    <v-icon v-else></v-icon>
-                                                </v-avatar>
-                                            </v-badge>
-                                            <!-- 群聊 -->
-                                            <v-avatar v-else size="50px">
-                                                <v-img v-if="targetUser.groupAvatar" alt="Avatar" cover
-                                                    :src="baseUrl + targetUser.groupAvatar.url"></v-img>
-                                                <v-icon v-else></v-icon>
-                                            </v-avatar>
-                                            <!-- 私聊 -->
-                                            <div v-if="targetUser.tab == 'friends'" class="flex flex-col justify-center">
-                                                <h5 class="text-lg font-semibold leading-6">{{ targetUser.name }}</h5>
-                                                <small>{{ targetUser.online ? '[在线]' : '[离线]' }}</small>
-                                            </div>
-                                            <!-- 群聊 -->
-                                            <div v-else class="flex flex-col justify-center">
-                                                <h5 class="text-lg font-semibold leading-6">{{ targetUser.name }} ({{
-                                                    targetUser.group_members.length }})</h5>
-                                            </div>
-                                        </div>
-                                        <div class="flex items-center">
-                                            <v-btn variant="text" icon>
-                                                <svg xmlns="http://www.w3.org/2000/svg"
-                                                    class="icon icon-tabler icon-tabler-phone" width="24px" height="24px"
-                                                    viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none"
-                                                    stroke-linecap="round" stroke-linejoin="round">
-                                                    <path stroke="none" d="M0 0h24v24H0z" fill="none"></path>
-                                                    <path
-                                                        d="M5 4h4l2 5l-2.5 1.5a11 11 0 0 0 5 5l1.5 -2.5l5 2v4a2 2 0 0 1 -2 2a16 16 0 0 1 -15 -15a2 2 0 0 1 2 -2">
-                                                    </path>
-                                                </svg>
-                                            </v-btn>
-                                            <v-btn variant="text" icon>
-                                                <svg xmlns="http://www.w3.org/2000/svg"
-                                                    class="icon icon-tabler icon-tabler-video-plus" width="24px"
-                                                    height="24px" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"
-                                                    fill="none" stroke-linecap="round" stroke-linejoin="round">
-                                                    <path stroke="none" d="M0 0h24v24H0z" fill="none"></path>
-                                                    <path
-                                                        d="M15 10l4.553 -2.276a1 1 0 0 1 1.447 .894v6.764a1 1 0 0 1 -1.447 .894l-4.553 -2.276v-4z">
-                                                    </path>
-                                                    <rect x="3" y="6" width="12" height="12" rx="2"></rect>
-                                                    <line x1="7" y1="12" x2="11" y2="12"></line>
-                                                    <line x1="9" y1="10" x2="9" y2="14"></line>
-                                                </svg>
-                                            </v-btn>
-                                            <v-btn @click="media = !media" icon="mdi-dots-vertical" variant="plain"></v-btn>
-                                        </div>
-                                    </div>
-                                    <hr>
-                                    <!-- 右侧消息记录 -->
-                                    <div v-scroll.self="onScroll" class="h-[530px] overflow-y-auto relative"
-                                        ref="scrollContainer" max-height="530">
-                                        <div class="flex min-h-full relative">
-                                            <!-- 消息列表 -->
-                                            <div class="w-full">
-                                                <div class="p-5" v-for="msg in messages">
-                                                    <div class="items-start flex gap-3 mb-1"
-                                                        :class="[msg.me ? 'justify-end flex-row-reverse' : 'justify-start flex-row']">
-                                                        <!-- 头像 -->
-                                                        <v-avatar size="40px">
-                                                            <v-img v-if="msg.user.avatar" cover="" alt="Avatar"
-                                                                :src="baseUrl + msg.user.avatar.url"></v-img>
+                                <v-layout>
+                                    <v-navigation-drawer v-model="ddrawer" location="right" temporary>
+                                        <v-list density="compact" @click:select="deleteList"
+                                            v-if="targetUser.tab == 'friends'" class="pt-6" nav>
+                                            <v-list-item variant="tonal" class="text-center mb-2" color="info"
+                                                title="删除聊天记录" value="deleteFriendHistory"></v-list-item>
+                                            <v-list-item variant="tonal" class="text-center" color="info" title="删除好友"
+                                                value="removeFriend"></v-list-item>
+                                        </v-list>
+                                        <v-list density="compact" @click:select="deleteList" v-else class="pt-6" nav>
+                                            <v-list-item variant="tonal" class="text-center mb-2" color="info"
+                                                title="删除聊天记录" value="deleteGroupHistory"></v-list-item>
+                                            <v-list-item variant="tonal" class="text-center" color="info" title="退出群聊"
+                                                value="leaveGroup"></v-list-item>
+                                        </v-list>
+                                    </v-navigation-drawer>
+                                    <v-main>
+                                        <div>
+                                            <!-- 右侧顶部，名字和操作按钮 -->
+                                            <div class="flex items-center gap-3 p-4 justify-between">
+                                                <div class="flex gap-4 items-center">
+                                                    <!-- 私聊 -->
+                                                    <v-badge v-if="targetUser.tab == 'friends'" dot
+                                                        :color="targetUser.online ? 'success' : ''" offset-y="36">
+                                                        <v-avatar size="50px">
+                                                            <v-img v-if="targetUser.avatar" alt="Avatar" cover
+                                                                :src="baseUrl + targetUser.avatar.url"></v-img>
                                                             <v-icon v-else></v-icon>
                                                         </v-avatar>
-                                                        <!-- 内容 -->
-                                                        <div class="flex flex-col w-full"
-                                                            :class="[!msg.me ? 'items-start' : 'items-end']">
-                                                            <small class="text-subtitle-2 text-gray-600">{{ msg.me ? '' :
-                                                                msg.user.name
-                                                            }}
-                                                                <span class="text-xs">{{ intlFormatDistance(new
-                                                                    Date(msg.msg.createdAt), new Date()) }}</span> </small>
-                                                            <v-sheet v-if="msg.msg.type == 'message'"
-                                                                color="rgb(242,246,250)" rounded
-                                                                class="rounded-md px-3 py-2 mb-1 max-w-[90%]">
-                                                                <p class="text-body-1 w-auto">{{ msg.msg.content }}</p>
-                                                                <!-- <p class="text-body-1 w-auto">{{ decryptMessage(msg.msg) }}</p> -->
-                                                            </v-sheet>
-                                                            <v-sheet v-if="msg.msg.type == 'image'" rounded
-                                                                class="rounded-md mb-1 max-w-[90%]">
-                                                                <a :href="(msg.msg.status == 'pending' ? '' : baseUrl) + msg.msg.content"
-                                                                    data-fancybox="gallery"
-                                                                    :data-caption="msg.msg.fileName">
-                                                                    <img class="rounded-lg mb-2"
-                                                                        :src="(msg.msg.status == 'pending' ? '' : baseUrl) + msg.msg.content"
-                                                                        width="152">
-                                                                </a>
-                                                                <template v-if="msg.me">
-                                                                    <v-chip size="x-small"
-                                                                        v-if="msg.msg.status == 'accepted'">
-                                                                        发送成功
-                                                                    </v-chip>
-                                                                    <v-chip v-else size="x-small">
-                                                                        发送中...
-                                                                    </v-chip>
-                                                                </template>
+                                                    </v-badge>
+                                                    <!-- 群聊 -->
+                                                    <v-avatar v-else size="50px">
+                                                        <v-img v-if="targetUser.groupAvatar" alt="Avatar" cover
+                                                            :src="baseUrl + targetUser.groupAvatar.url"></v-img>
+                                                        <v-icon v-else></v-icon>
+                                                    </v-avatar>
+                                                    <!-- 私聊 -->
+                                                    <div v-if="targetUser.tab == 'friends'"
+                                                        class="flex flex-col justify-center">
+                                                        <h5 class="text-lg font-semibold leading-6">{{ targetUser.name }}
+                                                        </h5>
+                                                        <small>{{ targetUser.online ? '[在线]' : '[离线]' }}</small>
+                                                    </div>
+                                                    <!-- 群聊 -->
+                                                    <div v-else class="flex flex-col justify-center">
+                                                        <h5 class="text-lg font-semibold leading-6">{{ targetUser.name }}
+                                                            ({{
+                                                                targetUser.group_members.length }})</h5>
+                                                    </div>
+                                                </div>
+                                                <div class="flex items-center">
+                                                    <v-btn variant="text" icon>
+                                                        <svg xmlns="http://www.w3.org/2000/svg"
+                                                            class="icon icon-tabler icon-tabler-phone" width="24px"
+                                                            height="24px" viewBox="0 0 24 24" stroke-width="2"
+                                                            stroke="currentColor" fill="none" stroke-linecap="round"
+                                                            stroke-linejoin="round">
+                                                            <path stroke="none" d="M0 0h24v24H0z" fill="none"></path>
+                                                            <path
+                                                                d="M5 4h4l2 5l-2.5 1.5a11 11 0 0 0 5 5l1.5 -2.5l5 2v4a2 2 0 0 1 -2 2a16 16 0 0 1 -15 -15a2 2 0 0 1 2 -2">
+                                                            </path>
+                                                        </svg>
+                                                    </v-btn>
+                                                    <v-btn variant="text" icon>
+                                                        <svg xmlns="http://www.w3.org/2000/svg"
+                                                            class="icon icon-tabler icon-tabler-video-plus" width="24px"
+                                                            height="24px" viewBox="0 0 24 24" stroke-width="2"
+                                                            stroke="currentColor" fill="none" stroke-linecap="round"
+                                                            stroke-linejoin="round">
+                                                            <path stroke="none" d="M0 0h24v24H0z" fill="none"></path>
+                                                            <path
+                                                                d="M15 10l4.553 -2.276a1 1 0 0 1 1.447 .894v6.764a1 1 0 0 1 -1.447 .894l-4.553 -2.276v-4z">
+                                                            </path>
+                                                            <rect x="3" y="6" width="12" height="12" rx="2"></rect>
+                                                            <line x1="7" y1="12" x2="11" y2="12"></line>
+                                                            <line x1="9" y1="10" x2="9" y2="14"></line>
+                                                        </svg>
+                                                    </v-btn>
+                                                    <v-btn @click="ddrawer = !ddrawer" icon="mdi-dots-vertical"
+                                                        variant="plain"></v-btn>
+                                                </div>
+                                            </div>
+                                            <hr>
+                                            <!-- 右侧消息记录 -->
+                                            <div v-scroll.self="onScroll" class="h-[530px] overflow-y-auto relative"
+                                                ref="scrollContainer" max-height="530">
+                                                <div class="flex min-h-full relative">
+                                                    <!-- 消息列表 -->
+                                                    <div class="w-full">
+                                                        <div class="p-5" v-for="msg in messages">
+                                                            <div class="items-start flex gap-3 mb-1"
+                                                                :class="[msg.me ? 'justify-end flex-row-reverse' : 'justify-start flex-row']">
+                                                                <!-- 头像 -->
+                                                                <v-avatar size="40px">
+                                                                    <v-img v-if="msg.user.avatar" cover="" alt="Avatar"
+                                                                        :src="baseUrl + msg.user.avatar.url"></v-img>
+                                                                    <v-icon v-else></v-icon>
+                                                                </v-avatar>
+                                                                <!-- 内容 -->
+                                                                <div class="flex flex-col w-full"
+                                                                    :class="[!msg.me ? 'items-start' : 'items-end']">
+                                                                    <small class="text-subtitle-2 text-gray-600">{{ msg.me ?
+                                                                        '' :
+                                                                        msg.user.name
+                                                                    }}
+                                                                        <span class="text-xs">{{ intlFormatDistance(new
+                                                                            Date(msg.msg.createdAt), new Date()) }}</span>
+                                                                    </small>
+                                                                    <template v-if="msg.msg.type == 'message'">
 
-                                                            </v-sheet>
+                                                                        <v-sheet color="rgb(242,246,250)" rounded
+                                                                            class="rounded-md px-3 py-2 mb-1 max-w-[90%]">
+
+                                                                            <p class="text-body-1 w-auto">{{ msg.msg.content
+                                                                            }}
+                                                                            </p>
+                                                                        </v-sheet>
+                                                                        <!-- 发送失败 -->
+                                                                        <v-chip size="x-small" color="red"
+                                                                            v-if="!msg.msg.success">
+                                                                            {{ msg.msg.isGroupMessage ? '发送失败，你还未加入，请先加入该群聊' : '发送失败，该用户还不是您的好友,请添加好友后重试' }}
+                                                                        </v-chip>
+                                                                    </template>
+                                                                    <template v-if="msg.msg.type == 'image'">
+                                                                        <v-sheet rounded
+                                                                            class="rounded-md mb-1 max-w-[90%]">
+                                                                            <a :href="(msg.msg.status == 'pending' ? '' : baseUrl) + msg.msg.content"
+                                                                                data-fancybox="gallery"
+                                                                                :data-caption="msg.msg.fileName">
+                                                                                <img class="rounded-lg mb-2"
+                                                                                    :src="(msg.msg.status == 'pending' ? '' : baseUrl) + msg.msg.content"
+                                                                                    width="152">
+                                                                            </a>
+                                                                        </v-sheet>
+                                                                        <template v-if="msg.me">
+                                                                            <!-- 发送失败 -->
+                                                                            <v-chip size="x-small" color="red"
+                                                                                v-if="!msg.msg.success">
+                                                                                {{ msg.msg.isGroupMessage ? '发送失败，你还未加入，请先加入该群聊' : '发送失败，该用户还不是您的好友,请添加好友后重试' }}
+                                                                            </v-chip>
+                                                                            <v-chip size="x-small"
+                                                                                v-else-if="msg.msg.status == 'accepted'">
+                                                                                发送成功
+                                                                            </v-chip>
+                                                                            <v-chip v-else size="x-small">
+                                                                                发送中...
+                                                                            </v-chip>
+                                                                        </template>
+                                                                    </template>
+                                                                </div>
+                                                            </div>
+
                                                         </div>
+                                                    </div>
+                                                    <!-- 右侧文件 -->
+                                                    <div v-if="media"
+                                                        class="w-[320px] border-l border-[rgb( 229,234,239)] sticky top-0 flex-shrink-0 overflow-y-auto h-[530px]"
+                                                        max-height="530">
+                                                        <v-sheet>
+                                                            <div class="p-6">
+                                                                <h6 class="mb-3 text-base font-semibold"
+                                                                    style="font-family: inherit!important">
+                                                                    Media (1)</h6>
+                                                                <div class="grid grid-cols-3 gap-2">
+                                                                    <div v-for="i in 8">
+                                                                        <img src="../public/imgs/blog-img5.jpg"
+                                                                            class="w-full" cover alt="img">
+                                                                    </div>
+                                                                </div>
+                                                                <h6 class="text-base mb-3 mt-7 font-semibold"
+                                                                    style="font-family: inherit!important">Attachments (5)
+                                                                </h6>
+                                                                <v-sheet>
+                                                                    <div>
+                                                                        <div class="flex items-center mt-7" v-for="i in 6">
+                                                                            <v-avatar size="48px">
+                                                                                <img :width="24" alt="Avatar"
+                                                                                    src="https://modernize-nuxt.adminmart.com/images/chat/icon-adobe.svg">
+                                                                            </v-avatar>
+                                                                            <div class="pl-4">
+                                                                                <h6 class="text-base text-inherit">
+                                                                                    service-task.pdf
+                                                                                </h6>
+                                                                                <h5 class="text-xs text-inherit">2MB</h5>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                </v-sheet>
+                                                            </div>
+                                                        </v-sheet>
+                                                    </div>
+                                                    <!-- 群聊 右侧群公告/群成员 -->
+                                                    <div v-if="targetUser.tab == 'groups'"
+                                                        class="hidden lg:block w-[200px] border-l border-[rgb( 229,234,239)] sticky top-0 flex-shrink-0 overflow-y-auto h-[530px]"
+                                                        max-height="530">
+                                                        <v-sheet>
+                                                            <div class="p-4 px-4">
+                                                                <h6 class="mb-3 text-base  font-medium px-2"
+                                                                    style="font-family: inherit!important">
+                                                                    群公告</h6>
+                                                                <v-sheet>
+                                                                    <div class="px-2">
+                                                                        <img src="../public/imgs/blog-img5.jpg"
+                                                                            class="w-full" cover alt="img">
+                                                                    </div>
+                                                                </v-sheet>
+                                                                <h6 class="text-base mb-1 mt-4 px-2 font-medium"
+                                                                    style="font-family: inherit!important">群成员 ({{
+                                                                        targetUser.group_members.length
+                                                                    }})
+                                                                </h6>
+                                                                <v-sheet>
+                                                                    <v-list nav class="px-0" density="compact">
+
+                                                                        <v-list-item class="px-2"
+                                                                            v-for="(item, i) in targetUser.group_members"
+                                                                            :key="item.id" :value="item">
+                                                                            <template v-slot:prepend>
+                                                                                <v-avatar size="30px">
+                                                                                    <v-img v-if="item.user.avatar"
+                                                                                        alt="Avatar" cover
+                                                                                        :src="baseUrl + item.user.avatar.url"></v-img>
+                                                                                    <v-icon v-else></v-icon>
+                                                                                </v-avatar>
+                                                                            </template>
+                                                                            <template v-slot:append>
+                                                                                <v-chip size="small"
+                                                                                    v-if="targetUser.create_by.id == item.user.id">
+                                                                                    群主
+                                                                                </v-chip>
+                                                                            </template>
+
+                                                                            <v-list-item-title
+                                                                                v-text="item.user.name"></v-list-item-title>
+                                                                        </v-list-item>
+                                                                    </v-list>
+                                                                </v-sheet>
+                                                            </div>
+                                                        </v-sheet>
                                                     </div>
 
                                                 </div>
                                             </div>
-                                            <!-- 右侧文件 -->
-                                            <div v-if="media"
-                                                class="w-[320px] border-l border-[rgb( 229,234,239)] sticky top-0 flex-shrink-0 overflow-y-auto h-[530px]"
-                                                max-height="530">
-                                                <v-sheet>
-                                                    <div class="p-6">
-                                                        <h6 class="mb-3 text-base font-semibold"
-                                                            style="font-family: inherit!important">
-                                                            Media (1)</h6>
-                                                        <div class="grid grid-cols-3 gap-2">
-                                                            <div v-for="i in 8">
-                                                                <img src="../public/imgs/blog-img5.jpg" class="w-full" cover
-                                                                    alt="img">
-                                                            </div>
-                                                        </div>
-                                                        <h6 class="text-base mb-3 mt-7 font-semibold"
-                                                            style="font-family: inherit!important">Attachments (5)</h6>
-                                                        <v-sheet>
-                                                            <div>
-                                                                <div class="flex items-center mt-7" v-for="i in 6">
-                                                                    <v-avatar size="48px">
-                                                                        <img :width="24" alt="Avatar"
-                                                                            src="https://modernize-nuxt.adminmart.com/images/chat/icon-adobe.svg">
-                                                                    </v-avatar>
-                                                                    <div class="pl-4">
-                                                                        <h6 class="text-base text-inherit">service-task.pdf
-                                                                        </h6>
-                                                                        <h5 class="text-xs text-inherit">2MB</h5>
-                                                                    </div>
-                                                                </div>
-                                                            </div>
-                                                        </v-sheet>
-                                                    </div>
-                                                </v-sheet>
-                                            </div>
-                                            <!-- 群聊 右侧群公告/群成员 -->
-                                            <div v-if="targetUser.tab == 'groups'"
-                                                class="hidden lg:block w-[200px] border-l border-[rgb( 229,234,239)] sticky top-0 flex-shrink-0 overflow-y-auto h-[530px]"
-                                                max-height="530">
-                                                <v-sheet>
-                                                    <div class="p-4 px-4">
-                                                        <h6 class="mb-3 text-base  font-medium px-2"
-                                                            style="font-family: inherit!important">
-                                                            群公告</h6>
-                                                        <v-sheet>
-                                                            <div class="px-2">
-                                                                <img src="../public/imgs/blog-img5.jpg" class="w-full" cover
-                                                                    alt="img">
-                                                            </div>
-                                                        </v-sheet>
-                                                        <h6 class="text-base mb-1 mt-4 px-2 font-medium"
-                                                            style="font-family: inherit!important">群成员 ({{
-                                                                targetUser.group_members.length
-                                                            }})
-                                                        </h6>
-                                                        <v-sheet>
-                                                            <v-list nav class="px-0" density="compact">
-
-                                                                <v-list-item class="px-2"
-                                                                    v-for="(item, i) in targetUser.group_members"
-                                                                    :key="item.id" :value="item">
-                                                                    <template v-slot:prepend>
-                                                                        <v-avatar size="30px">
-                                                                            <v-img v-if="item.user.avatar" alt="Avatar"
-                                                                                cover
-                                                                                :src="baseUrl + item.user.avatar.url"></v-img>
-                                                                            <v-icon v-else></v-icon>
-                                                                        </v-avatar>
-                                                                    </template>
-                                                                    <template v-slot:append>
-                                                                        <v-chip size="small"
-                                                                            v-if="targetUser.create_by.id == item.user.id">
-                                                                            群主
-                                                                        </v-chip>
-                                                                    </template>
-
-                                                                    <v-list-item-title
-                                                                        v-text="item.user.name"></v-list-item-title>
-                                                                </v-list-item>
-                                                            </v-list>
-                                                        </v-sheet>
-                                                    </div>
-                                                </v-sheet>
-                                            </div>
-
                                         </div>
-                                    </div>
-                                </div>
-                                <hr>
-                                <!-- 聊天底部，输入框，发送 -->
-                                <div class="flex items-center p-4 inputform">
-                                    <v-btn variant="plain" icon>
-                                        <svg xmlns="http://www.w3.org/2000/svg"
-                                            class="icon icon-tabler icon-tabler-mood-smile" width="24px" height="24px"
-                                            viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none"
-                                            stroke-linecap="round" stroke-linejoin="round">
-                                            <path stroke="none" d="M0 0h24v24H0z" fill="none"></path>
-                                            <circle cx="12" cy="12" r="9"></circle>
-                                            <line x1="9" y1="10" x2="9.01" y2="10"></line>
-                                            <line x1="15" y1="10" x2="15.01" y2="10"></line>
-                                            <path d="M9.5 15a3.5 3.5 0 0 0 5 0"></path>
-                                        </svg>
-                                    </v-btn>
-                                    <v-text-field v-model="message" @paste="handlePaste" color="info" type="text"
-                                        variant="outlined" @keydown.enter="send" density="compact" single-line hide-details
-                                        class="shadow-none mx-2"></v-text-field>
-                                    <v-btn variant="plain" @click="send" icon>
-                                        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-send"
-                                            width="20px" height="20px" viewBox="0 0 24 24" stroke-width="2"
-                                            stroke="currentColor" fill="none" stroke-linecap="round"
-                                            stroke-linejoin="round">
-                                            <path stroke="none" d="M0 0h24v24H0z" fill="none"></path>
-                                            <line x1="10" y1="14" x2="21" y2="3"></line>
-                                            <path
-                                                d="M21 3l-6.5 18a0.55 .55 0 0 1 -1 0l-3.5 -7l-7 -3.5a0.55 .55 0 0 1 0 -1l18 -6.5">
-                                            </path>
-                                        </svg>
-                                    </v-btn>
-                                    <!-- 图片 -->
-                                    <v-btn :variant="sendImage ? 'tonal' : 'plain'" icon @click="sendImage = !sendImage">
-                                        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-photo"
-                                            width="20px" height="20px" viewBox="0 0 24 24" stroke-width="2"
-                                            stroke="currentColor" fill="none" stroke-linecap="round"
-                                            stroke-linejoin="round">
-                                            <path stroke="none" d="M0 0h24v24H0z" fill="none"></path>
-                                            <line x1="15" y1="8" x2="15.01" y2="8"></line>
-                                            <rect x="4" y="4" width="16" height="16" rx="3"></rect>
-                                            <path d="M4 15l4 -4a3 5 0 0 1 3 0l5 5"></path>
-                                            <path d="M14 14l1 -1a3 5 0 0 1 3 0l2 2"></path>
-                                        </svg>
-                                    </v-btn>
-                                    <!-- 文件 -->
-                                    <v-btn variant="plain" icon>
-                                        <svg xmlns="http://www.w3.org/2000/svg"
-                                            class="icon icon-tabler icon-tabler-paperclip" width="20px" height="20px"
-                                            viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none"
-                                            stroke-linecap="round" stroke-linejoin="round">
-                                            <path stroke="none" d="M0 0h24v24H0z" fill="none"></path>
-                                            <path
-                                                d="M15 7l-6.5 6.5a1.5 1.5 0 0 0 3 3l6.5 -6.5a3 3 0 0 0 -6 -6l-6.5 6.5a4.5 4.5 0 0 0 9 9l6.5 -6.5">
-                                            </path>
-                                        </svg>
-                                    </v-btn>
-                                </div>
-                                <hr>
-                                <v-sheet class="w-full p-2" v-if="sendImage || images.length > 0">
-                                    <v-file-input v-model="files" @update:modelValue="imageUpdate" color="info" counter
-                                        label="图像" min-heigth="100" multiple placeholder="Select your files" prepend-icon=""
-                                        variant="outlined" :show-size="2000">
-                                        <template v-slot:selection="{ fileNames, totalBytes, totalBytesReadable }">
-                                            <div class="grid grid-cols-6 gap-2">
-                                                <template v-for="(fileName, index) in fileNames" :key="fileName">
-                                                    <div class="flex flex-col w-full">
-                                                        <v-img height="99" rounded="small" min-width="99"
-                                                            :src="images[index]"></v-img>
+                                        <hr>
+                                        <!-- 聊天底部，输入框，发送 -->
+                                        <div class="flex items-center p-4 inputform">
+                                            <v-btn variant="plain" icon>
+                                                <svg xmlns="http://www.w3.org/2000/svg"
+                                                    class="icon icon-tabler icon-tabler-mood-smile" width="24px"
+                                                    height="24px" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"
+                                                    fill="none" stroke-linecap="round" stroke-linejoin="round">
+                                                    <path stroke="none" d="M0 0h24v24H0z" fill="none"></path>
+                                                    <circle cx="12" cy="12" r="9"></circle>
+                                                    <line x1="9" y1="10" x2="9.01" y2="10"></line>
+                                                    <line x1="15" y1="10" x2="15.01" y2="10"></line>
+                                                    <path d="M9.5 15a3.5 3.5 0 0 0 5 0"></path>
+                                                </svg>
+                                            </v-btn>
+                                            <v-text-field v-model="message" @paste="handlePaste" color="info" type="text"
+                                                variant="outlined" @keydown.enter="send" density="compact" single-line
+                                                hide-details class="shadow-none mx-2"></v-text-field>
+                                            <v-btn variant="plain" @click="send" icon>
+                                                <svg xmlns="http://www.w3.org/2000/svg"
+                                                    class="icon icon-tabler icon-tabler-send" width="20px" height="20px"
+                                                    viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none"
+                                                    stroke-linecap="round" stroke-linejoin="round">
+                                                    <path stroke="none" d="M0 0h24v24H0z" fill="none"></path>
+                                                    <line x1="10" y1="14" x2="21" y2="3"></line>
+                                                    <path
+                                                        d="M21 3l-6.5 18a0.55 .55 0 0 1 -1 0l-3.5 -7l-7 -3.5a0.55 .55 0 0 1 0 -1l18 -6.5">
+                                                    </path>
+                                                </svg>
+                                            </v-btn>
+                                            <!-- 图片 -->
+                                            <v-btn :variant="sendImage ? 'tonal' : 'plain'" icon
+                                                @click="sendImage = !sendImage">
+                                                <svg xmlns="http://www.w3.org/2000/svg"
+                                                    class="icon icon-tabler icon-tabler-photo" width="20px" height="20px"
+                                                    viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none"
+                                                    stroke-linecap="round" stroke-linejoin="round">
+                                                    <path stroke="none" d="M0 0h24v24H0z" fill="none"></path>
+                                                    <line x1="15" y1="8" x2="15.01" y2="8"></line>
+                                                    <rect x="4" y="4" width="16" height="16" rx="3"></rect>
+                                                    <path d="M4 15l4 -4a3 5 0 0 1 3 0l5 5"></path>
+                                                    <path d="M14 14l1 -1a3 5 0 0 1 3 0l2 2"></path>
+                                                </svg>
+                                            </v-btn>
+                                            <!-- 文件 -->
+                                            <v-btn variant="plain" icon>
+                                                <svg xmlns="http://www.w3.org/2000/svg"
+                                                    class="icon icon-tabler icon-tabler-paperclip" width="20px"
+                                                    height="20px" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"
+                                                    fill="none" stroke-linecap="round" stroke-linejoin="round">
+                                                    <path stroke="none" d="M0 0h24v24H0z" fill="none"></path>
+                                                    <path
+                                                        d="M15 7l-6.5 6.5a1.5 1.5 0 0 0 3 3l6.5 -6.5a3 3 0 0 0 -6 -6l-6.5 6.5a4.5 4.5 0 0 0 9 9l6.5 -6.5">
+                                                    </path>
+                                                </svg>
+                                            </v-btn>
+                                        </div>
+                                        <hr>
+                                        <v-sheet class="w-full p-2" v-if="sendImage || images.length > 0">
+                                            <v-file-input v-model="files" @update:modelValue="imageUpdate" color="info"
+                                                counter label="图像" min-heigth="100" multiple placeholder="Select your files"
+                                                prepend-icon="" variant="outlined" :show-size="2000">
+                                                <template v-slot:selection="{ fileNames, totalBytes, totalBytesReadable }">
+                                                    <div class="grid grid-cols-6 gap-2">
+                                                        <template v-for="(fileName, index) in fileNames" :key="fileName">
+                                                            <div class="flex flex-col w-full">
+                                                                <v-img height="99" rounded="small" min-width="99"
+                                                                    :src="images[index]"></v-img>
 
-                                                        <v-chip color="deep-purple-accent-4" label size="small"
-                                                            class="me-2">
-                                                            {{ fileName }}
-                                                        </v-chip>
+                                                                <v-chip color="deep-purple-accent-4" label size="small"
+                                                                    class="me-2">
+                                                                    {{ fileName }}
+                                                                </v-chip>
+                                                            </div>
+                                                        </template>
                                                     </div>
                                                 </template>
-                                            </div>
-                                        </template>
-                                    </v-file-input>
-                                </v-sheet>
+                                            </v-file-input>
+                                        </v-sheet>
+                                    </v-main>
+                                </v-layout>
                             </div>
                         </div>
                         <!-- 联系人 列表-->

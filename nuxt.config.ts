@@ -55,12 +55,12 @@ export default defineNuxtConfig({
   runtimeConfig: {
     apiSecret: '123',
     public: {
-      apiBase: 'https://socketio.anran.life/api',
-      baseUrl: 'https://socketio.anran.life',
-      socketUrl: 'https://socketio.anran.life'
-      // apiBase: 'http://localhost:1996/api',
-      // baseUrl: 'http://localhost:1996',
-      // socketUrl: 'http://localhost:1338'
+      // apiBase: 'https://socketio.anran.life/api',
+      // baseUrl: 'https://socketio.anran.life',
+      // socketUrl: 'https://socketio.anran.life'
+      apiBase: 'http://localhost:1996/api',
+      baseUrl: 'http://localhost:1996',
+      socketUrl: 'http://localhost:1338'
     }
   }
 })

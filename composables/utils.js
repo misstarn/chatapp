@@ -64,18 +64,22 @@ export const jwkToCryptoKey3 = (jwk) => {
 
 // 将ArrayBuffer转换为Base64的函数
 export const arrayBufferToBase64 = (arrayBuffer) => {
-    const uint8Array = new Uint8Array(arrayBuffer);
-    const binaryString = uint8Array.reduce((acc, byte) => acc + String.fromCharCode(byte), '');
-    return btoa(binaryString);
+    if (process.client) {
+        const uint8Array = new Uint8Array(arrayBuffer);
+        const binaryString = uint8Array.reduce((acc, byte) => acc + String.fromCharCode(byte), '');
+        return btoa(binaryString);
+    }
 }
 
 // 将Base64转换为ArrayBuffer的函数
 export const base64ToArrayBuffer = (base64) => {
-    const binaryString = atob(base64);
-    const length = binaryString.length;
-    const uint8Array = new Uint8Array(length);
-    for (let i = 0; i < length; i++) {
-        uint8Array[i] = binaryString.charCodeAt(i);
+    if (process.client) {
+        const binaryString = atob(base64);
+        const length = binaryString.length;
+        const uint8Array = new Uint8Array(length);
+        for (let i = 0; i < length; i++) {
+            uint8Array[i] = binaryString.charCodeAt(i);
+        }
+        return uint8Array.buffer;
     }
-    return uint8Array.buffer;
 }
