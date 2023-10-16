@@ -179,7 +179,7 @@ socket.on('userGroup', (data) => {
         const ugm = d.user_group_members.filter(item => item.user.online == true)
 
         return {
-            ...d, 
+            ...d,
             onlineCount: ugm.length
         }
     })
@@ -444,7 +444,6 @@ const getHistory = async (start1) => {
             // 获取了指定的所有消息
             // console.log(lists.value, limit.value, start.value)
             for (let k = 0; k < lists.value.length; k++) {
-
                 await updateMsg(lists.value[k])
             }
         }
@@ -639,6 +638,7 @@ const send = async () => {
                     fileName: files.value[i].name,
                     content: images.value[i],
                     status: 'pending',
+                    success: true
                 },
                 filename: files.value[i].name
             }
@@ -1650,7 +1650,7 @@ const snackbarText = ref('')
 const timeout = ref(2000)
 
 // 消息
-const Message = ({text, timeout }) => {
+const Message = ({ text, timeout }) => {
     snackbar.value = true
     snackbarText.value = text
     timeout = timeout
@@ -1734,38 +1734,115 @@ const ddrawer = ref(false)
 // 
 const drawer = ref(false)
 
-// 是否删除成功
-socket.on('removeFriendReturn', (data) => {
+// 是否删除操作成功
+socket.on('removeReturn', (data) => {
     console.log(data)
     Message({
         text: data.msg,
         timeout: 2000
     })
+    if (data.status == 'success') {
+        ddrawer.value = false
+        showMsg.value = false
+
+        const newFriends = friends.value.filter((friend) => friend.uid !== targetUser.value.uid)
+
+        console.log(newFriends, targetUser.value.uid, '222')
+
+        friends.value = newFriends
+
+        msgStore.$patch({
+            friends: newFriends
+        })
+
+        dialog.value = false
+        dialog2.value = false
+
+    }
+
 })
 
-const deleteList = (val) => {
+// 删除好友，删除消息历史
+const deleteList = async (val) => {
     console.log(val)
     switch (val.id) {
         // 删除好友
         case 'removeFriend':
             console.log(targetUser.value)
-            socket.emit('removeFriend', {
-                friendshipId: targetUser.value.friendship.id,
-                usergroupmemberId: targetUser.value.usergroupmemberId
-            })
+            dialog.value = true
             break;
-            // 离开群聊
+        // 离开群聊
         case 'leaveGroup':
             console.log(targetUser.value)
-            socket.emit('leaveGroup', {
-                group_member: targetUser.value.group_member
-            })
+            dialog2.value = true
             break;
-    
+
         default:
+            console.log(targetUser.value.uid)
+            // 删除
+           dialog3.value = true
             break;
     }
 }
+
+// 删除历史记录
+const deleteHistory = async (uid) => {
+    if (!db.value) {
+        // 如果数据库未打开，先打开它
+        await openDatabase()
+    }
+    let status = false
+    // 创建事务
+    const transaction = db.value.transaction(['messages'], 'readwrite')
+    const messageStore = transaction.objectStore('messages')
+
+    const index = messageStore.index('uid')
+
+    const deleteRequests = []
+    index.openCursor(IDBKeyRange.only(uid)).onsuccess = (event) => {
+        const cursor = event.target.result
+        if (cursor) {
+            deleteRequests.push(messageStore.delete(cursor.primaryKey))
+            cursor.continue()
+        }
+    }
+
+    // 等待删除是所有请求完成
+    Promise.all(deleteRequests)
+        .then(() => {
+            console.log('删除完成')
+            messages.value = []
+            ddrawer.value = false
+            dialog3.value = false
+        }).catch(err => {
+            console.error('删除时发生错误', err)
+            getHistory(0)
+        })
+
+}
+
+// 删除好友
+const deleteFriend = ({ friendshipId, usergroupmemberId }) => {
+    socket.emit('removeFriend', {
+        friendshipId,
+        usergroupmemberId
+    })
+}
+
+// 退出群聊
+const leaveGroup22 = ({ group_member }) => {
+    socket.emit('leaveGroup', {
+        group_member
+    })
+}
+
+
+
+const dialog = ref(false)
+const dialog2 = ref(false)
+const dialog3 = ref(false)
+
+
 </script>
 
 
@@ -2773,6 +2850,63 @@ const deleteList = (val) => {
                         <div v-if="msg">
                             <!-- 右侧发送消息框，历史消息记录 -->
                             <div class="flex-1" v-if="showMsg">
+                                <v-dialog v-model="dialog" persistent width="auto">
+                                    <v-card>
+                                        <v-card-title class="text-h5">
+                                            删除好友
+                                        </v-card-title>
+                                        <v-card-text>删除后不可撤回，是否删除？</v-card-text>
+                                        <v-card-actions>
+                                            <v-spacer></v-spacer>
+                                            <v-btn color="red" variant="text" @click="dialog = false">
+                                                取消
+                                            </v-btn>
+                                            <v-btn color="green-darken-1" variant="text" @click=" deleteFriend({
+                                                friendshipId: targetUser.friendship.id,
+                                                usergroupmemberId: targetUser.usergroupmemberId
+                                            })">
+                                                确认
+                                            </v-btn>
+                                        </v-card-actions>
+                                    </v-card>
+                                </v-dialog>
+                                <v-dialog v-model="dialog2" persistent width="auto">
+                                    <v-card>
+                                        <v-card-title class="text-h5">
+                                            退出群聊
+                                        </v-card-title>
+                                        <v-card-text>操作后不可撤回，是否退出？</v-card-text>
+                                        <v-card-actions>
+                                            <v-spacer></v-spacer>
+                                            <v-btn color="red" variant="text" @click="dialog2 = false">
+                                                取消
+                                            </v-btn>
+                                            <v-btn color="green-darken-1" variant="text" @click="leaveGroup22({
+                                                group_member: targetUser.group_member
+                                            })">
+                                                确认
+                                            </v-btn>
+                                        </v-card-actions>
+                                    </v-card>
+                                </v-dialog>
+                                <!-- 删除聊天记录 -->
+                                <v-dialog v-model="dialog3" persistent width="auto">
+                                    <v-card>
+                                        <v-card-title class="text-h5">
+                                            删除聊天记录
+                                        </v-card-title>
+                                        <v-card-text>操作后不可撤回，是否删除？</v-card-text>
+                                        <v-card-actions>
+                                            <v-spacer></v-spacer>
+                                            <v-btn color="red" variant="text" @click="dialog3 = false">
+                                                取消
+                                            </v-btn>
+                                            <v-btn color="green-darken-1" variant="text" @click="deleteHistory(targetUser.uid)">
+                                                确认
+                                            </v-btn>
+                                        </v-card-actions>
+                                    </v-card>
+                                </v-dialog>
                                 <v-layout>
                                     <v-navigation-drawer v-model="ddrawer" location="right" temporary>
                                         <v-list density="compact" @click:select="deleteList"
@@ -2893,7 +3027,8 @@ const deleteList = (val) => {
                                                                         <!-- 发送失败 -->
                                                                         <v-chip size="x-small" color="red"
                                                                             v-if="!msg.msg.success">
-                                                                            {{ msg.msg.isGroupMessage ? '发送失败，你还未加入，请先加入该群聊' : '发送失败，该用户还不是您的好友,请添加好友后重试' }}
+                                                                            {{ msg.msg.isGroupMessage ? '发送失败，你还未加入，请先加入该群聊'
+                                                                                : '发送失败，该用户还不是您的好友,请添加好友后重试' }}
                                                                         </v-chip>
                                                                     </template>
                                                                     <template v-if="msg.msg.type == 'image'">
@@ -2911,7 +3046,9 @@ const deleteList = (val) => {
                                                                             <!-- 发送失败 -->
                                                                             <v-chip size="x-small" color="red"
                                                                                 v-if="!msg.msg.success">
-                                                                                {{ msg.msg.isGroupMessage ? '发送失败，你还未加入，请先加入该群聊' : '发送失败，该用户还不是您的好友,请添加好友后重试' }}
+                                                                                {{ msg.msg.isGroupMessage ?
+                                                                                    '发送失败，你还未加入，请先加入该群聊' :
+                                                                                    '发送失败，该用户还不是您的好友,请添加好友后重试' }}
                                                                             </v-chip>
                                                                             <v-chip size="x-small"
                                                                                 v-else-if="msg.msg.status == 'accepted'">
