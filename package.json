@@ -26,6 +26,7 @@
     "pinia": "^2.1.6",
     "qs": "^6.11.2",
     "socket.io-client": "^4.7.2",
+    "vue3-emoji-picker": "^1.1.8",
     "vuetify": "^3.3.20"
   }
 }

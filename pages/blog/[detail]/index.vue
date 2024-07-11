@@ -3,7 +3,6 @@ import { VBottomSheet } from 'vuetify/labs/VBottomSheet'
 import { VDatePicker } from 'vuetify/labs/VDatePicker'
 import { VInfiniteScroll } from 'vuetify/labs/VInfiniteScroll'
 console.log('detail')
-
 const items = [
     {
         title: 'Home',
